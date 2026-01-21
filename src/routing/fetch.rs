@@ -7,7 +7,10 @@ use tokio::sync::mpsc::Sender;
 use tracing::{debug, info};
 
 use super::bbox::BoundingBox;
-use super::cache::{cache, CachedEdge, CachedNetwork, CachedNode, NetworkRef, CACHE_VERSION};
+use super::cache::{
+    cache, record_hit, record_miss, CachedEdge, CachedNetwork, CachedNode, NetworkRef,
+    CACHE_VERSION,
+};
 use super::config::NetworkConfig;
 use super::coord::Coord;
 use super::error::RoutingError;
@@ -30,6 +33,7 @@ impl RoadNetwork {
         {
             let cache_guard = cache().read().await;
             if cache_guard.contains_key(&cache_key) {
+                record_hit();
                 info!("Using in-memory cached road network for {}", cache_key);
                 if let Some(tx) = progress {
                     let _ = tx
@@ -39,6 +43,7 @@ impl RoadNetwork {
                 return Ok(NetworkRef::new(cache_guard, cache_key));
             }
         }
+        record_miss();
 
         if let Some(tx) = progress {
             let _ = tx.send(RoutingProgress::CheckingCache { percent: 5 }).await;
@@ -280,7 +285,6 @@ out body;"#,
                         let edge_data = EdgeData {
                             travel_time_s: travel_time,
                             distance_m: distance,
-                            geometry: vec![coord1, coord2],
                         };
 
                         network.add_edge(idx1, idx2, edge_data.clone());
@@ -301,6 +305,9 @@ out body;"#,
             network.edge_count(),
             way_count
         );
+
+        // Build spatial index for fast snap_to_road queries
+        network.build_spatial_index();
 
         Ok(network)
     }
@@ -335,6 +342,9 @@ out body;"#,
         for edge in &cached.edges {
             network.add_edge_by_index(edge.from, edge.to, edge.travel_time_s, edge.distance_m);
         }
+
+        // Build spatial index for fast snap_to_road queries
+        network.build_spatial_index();
 
         Ok(network)
     }
