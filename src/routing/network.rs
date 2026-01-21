@@ -54,7 +54,7 @@ impl RouteResult {
 }
 
 /// A coordinate that has been snapped to the road network.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SnappedCoord {
     /// The original coordinate before snapping.
     pub original: Coord,
@@ -67,7 +67,7 @@ pub struct SnappedCoord {
 }
 
 /// A point in the R-tree spatial index.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct RTreePoint {
     lat: f64,
     lng: f64,

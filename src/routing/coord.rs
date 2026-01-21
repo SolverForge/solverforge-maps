@@ -40,7 +40,7 @@ impl fmt::Display for CoordError {
 impl std::error::Error for CoordError {}
 
 /// A geographic coordinate with latitude and longitude.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Coord {
     pub lat: f64,
     pub lng: f64,

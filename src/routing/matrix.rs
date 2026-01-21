@@ -14,7 +14,7 @@ use super::progress::RoutingProgress;
 pub const UNREACHABLE: i64 = i64::MAX;
 
 /// A travel time matrix with metadata and analysis methods.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TravelTimeMatrix {
     data: Vec<i64>,
     size: usize,
