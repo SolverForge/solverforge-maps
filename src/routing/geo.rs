@@ -16,8 +16,8 @@ pub fn haversine_distance(a: Coord, b: Coord) -> f64 {
     let dlat = (b.lat - a.lat).to_radians();
     let dlng = (b.lng - a.lng).to_radians();
 
-    let h = (dlat / 2.0).sin().powi(2)
-        + lat1_rad.cos() * lat2_rad.cos() * (dlng / 2.0).sin().powi(2);
+    let h =
+        (dlat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (dlng / 2.0).sin().powi(2);
     let c = 2.0 * h.sqrt().asin();
 
     R * c

@@ -91,7 +91,7 @@ impl RoadNetwork {
                 pair_count += 1;
 
                 if let Some(tx) = progress {
-                    if pair_count % 10 == 0 || pair_count == total_pairs {
+                    if pair_count.is_multiple_of(10) || pair_count == total_pairs {
                         let percent = 80 + (pair_count * 15 / total_pairs.max(1)) as u8;
                         let _ = tx
                             .send(RoutingProgress::ComputingGeometries {

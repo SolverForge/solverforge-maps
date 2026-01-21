@@ -5,13 +5,34 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum RoutingProgress {
-    CheckingCache { percent: u8 },
-    DownloadingNetwork { percent: u8, bytes: usize },
-    ParsingOsm { percent: u8, nodes: usize, edges: usize },
-    BuildingGraph { percent: u8 },
-    ComputingMatrix { percent: u8, row: usize, total: usize },
-    ComputingGeometries { percent: u8, pair: usize, total: usize },
-    EncodingGeometries { percent: u8 },
+    CheckingCache {
+        percent: u8,
+    },
+    DownloadingNetwork {
+        percent: u8,
+        bytes: usize,
+    },
+    ParsingOsm {
+        percent: u8,
+        nodes: usize,
+        edges: usize,
+    },
+    BuildingGraph {
+        percent: u8,
+    },
+    ComputingMatrix {
+        percent: u8,
+        row: usize,
+        total: usize,
+    },
+    ComputingGeometries {
+        percent: u8,
+        pair: usize,
+        total: usize,
+    },
+    EncodingGeometries {
+        percent: u8,
+    },
     Complete,
 }
 

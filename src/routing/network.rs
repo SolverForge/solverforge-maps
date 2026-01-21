@@ -26,6 +26,7 @@ impl NodeData {
 pub struct EdgeData {
     pub travel_time_s: f64,
     pub distance_m: f64,
+    #[allow(dead_code)]
     pub geometry: Vec<Coord>,
 }
 
