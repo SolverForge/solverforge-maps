@@ -5,11 +5,14 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 ## Features
 
 - **OSM Road Network**: Download and cache OpenStreetMap road data via Overpass API
-- **Shortest Path Routing**: A*/Dijkstra routing with travel times and distances
-- **Travel Time Matrix**: Compute all-pairs travel times for location sets
-- **Route Geometry**: Full road-following geometries for visualization
+- **R-Tree Spatial Indexing**: O(log n) coordinate snapping to road network
+- **Shortest Path Routing**: Dijkstra/A* routing with travel times and distances
+- **Travel Time Matrix**: Compute all-pairs travel times with parallel computation
+- **Route Geometry**: Full road-following geometries with Douglas-Peucker simplification
 - **Polyline Encoding**: Google Polyline Algorithm for efficient route transmission
-- **Three-Tier Caching**: In-memory, file-based, and API caching for performance
+- **Input Validation**: Fail-fast coordinate and bounding box validation
+- **Cache Management**: In-memory and file-based caching with inspection and eviction
+- **Graph Analysis**: Connectivity analysis for debugging routing failures
 - **Zero-Erasure Design**: No `Arc`, no `Box<dyn>`, concrete types throughout
 
 ## Installation
@@ -32,57 +35,112 @@ async fn main() -> RoutingResult<()> {
         Coord::new(39.96, -75.17),
     ];
 
-    let bbox = BoundingBox::from_coords(&locations).expand(0.1);
+    let bbox = BoundingBox::from_coords(&locations).expand_for_routing(&locations);
     let config = NetworkConfig::default();
 
     let network = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
     let matrix = network.compute_matrix(&locations, None).await;
-    let route = network.route(locations[0], locations[1]);
+    let route = network.route(locations[0], locations[1])?;
 
-    println!("Matrix: {:?}", matrix);
-    println!("Route: {:?}", route);
+    println!("Matrix size: {}", matrix.size());
+    println!("Route duration: {} seconds", route.duration_seconds);
     Ok(())
 }
 ```
+
+---
 
 ## API Reference
 
 ### Coord
 
-Geographic coordinate with latitude and longitude.
+Geographic coordinate with latitude and longitude. Validates input on construction.
 
 ```rust
-use solverforge_maps::Coord;
+use solverforge_maps::{Coord, CoordError};
 
+// Panics on invalid input (NaN, infinite, out of range)
 let coord = Coord::new(39.95, -75.16);
-let other = Coord::new(39.96, -75.17);
 
+// Fallible construction
+let coord: Result<Coord, CoordError> = Coord::try_new(91.0, -75.16);
+assert!(matches!(coord, Err(CoordError::LatOutOfRange { .. })));
+
+// Valid ranges: lat [-90, 90], lng [-180, 180]
+let coord = Coord::try_new(39.95, -75.16).unwrap();
+
+// Distance calculation
+let other = Coord::new(39.96, -75.17);
 let distance_meters = coord.distance_to(other);
 
-let from_tuple: Coord = (39.95, -75.16).into();
+// Tuple conversion
+let from_tuple: Result<Coord, CoordError> = (39.95, -75.16).try_into();
+let to_tuple: (f64, f64) = coord.into();
 ```
+
+#### CoordError
+
+```rust
+pub enum CoordError {
+    LatOutOfRange { value: f64 },   // lat < -90 or > 90
+    LngOutOfRange { value: f64 },   // lng < -180 or > 180
+    LatNaN,
+    LngNaN,
+    LatInfinite { value: f64 },
+    LngInfinite { value: f64 },
+}
+```
+
+---
 
 ### BoundingBox
 
-Rectangular geographic region.
+Rectangular geographic region. Validates that min < max on construction.
 
 ```rust
-use solverforge_maps::{BoundingBox, Coord};
+use solverforge_maps::{BoundingBox, BBoxError, Coord};
 
+// Panics if min > max
 let bbox = BoundingBox::new(39.9, -75.2, 40.0, -75.1);
 
+// Fallible construction
+let bbox: Result<BoundingBox, BBoxError> = BoundingBox::try_new(40.0, -75.2, 39.9, -75.1);
+assert!(matches!(bbox, Err(BBoxError::MinLatGreaterThanMax { .. })));
+
+// From coordinates
 let locations = vec![
     Coord::new(39.95, -75.16),
     Coord::new(39.96, -75.17),
 ];
 let bbox = BoundingBox::from_coords(&locations);
 
-let expanded = bbox.expand(0.1);
+// Expansion methods
+let expanded = bbox.expand(0.1);                      // Expand by ratio
+let expanded = bbox.expand_meters(1000.0);            // Expand by meters
+let expanded = bbox.expand_for_routing(&locations);   // Smart expansion (1.4x detour factor)
 
-let center = bbox.center();
+// Queries
+let center: Coord = bbox.center();
+let contains: bool = bbox.contains(Coord::new(39.95, -75.15));
 
-let contains = bbox.contains(Coord::new(39.95, -75.15));
+// Cache key for persistence
+let key: String = bbox.cache_key();
 ```
+
+#### BBoxError
+
+```rust
+pub enum BBoxError {
+    MinLatGreaterThanMax { min: f64, max: f64 },
+    MinLngGreaterThanMax { min: f64, max: f64 },
+    LatOutOfRange { value: f64 },
+    LngOutOfRange { value: f64 },
+    NaN { field: &'static str },
+    Infinite { field: &'static str, value: f64 },
+}
+```
+
+---
 
 ### NetworkConfig
 
@@ -90,19 +148,21 @@ Configuration for network loading and routing.
 
 ```rust
 use solverforge_maps::{NetworkConfig, SpeedProfile};
-use std::path::PathBuf;
 use std::time::Duration;
 
+// Defaults
 let config = NetworkConfig::default();
 
+// Builder pattern
 let config = NetworkConfig::new()
     .overpass_url("https://overpass-api.de/api/interpreter")
-    .cache_dir(PathBuf::from(".osm_cache"))
+    .cache_dir("/tmp/osm_cache")
     .connect_timeout(Duration::from_secs(30))
     .read_timeout(Duration::from_secs(120))
-    .speed_profile(SpeedProfile::Default)
-    .highway_types(vec!["motorway", "trunk", "primary", "secondary", "tertiary", "residential"]);
+    .speed_profile(SpeedProfile::default());
 ```
+
+---
 
 ### SpeedProfile
 
@@ -111,21 +171,25 @@ Speed profiles for different road types.
 ```rust
 use solverforge_maps::SpeedProfile;
 
-let profile = SpeedProfile::Default;
+let profile = SpeedProfile::default();
 
-let profile = SpeedProfile::Custom {
-    motorway_kmh: 110.0,
-    trunk_kmh: 90.0,
-    primary_kmh: 70.0,
-    secondary_kmh: 60.0,
-    tertiary_kmh: 50.0,
-    residential_kmh: 35.0,
-    service_kmh: 25.0,
-    default_kmh: 30.0,
-};
-
-let speed_mps = profile.speed_mps("motorway");
+// Get speed in meters per second
+let speed_mps: f64 = profile.speed_mps("motorway");  // ~27.78 m/s (100 km/h)
 ```
+
+| Highway Type | Default Speed |
+|-------------|---------------|
+| motorway | 100 km/h |
+| trunk | 80 km/h |
+| primary | 60 km/h |
+| secondary | 50 km/h |
+| tertiary | 40 km/h |
+| residential | 30 km/h |
+| unclassified | 30 km/h |
+| service | 20 km/h |
+| living_street | 10 km/h |
+
+---
 
 ### RoadNetwork
 
@@ -139,32 +203,87 @@ use solverforge_maps::{BoundingBox, NetworkConfig, RoadNetwork, NetworkRef};
 let bbox = BoundingBox::new(39.9, -75.2, 40.0, -75.1);
 let config = NetworkConfig::default();
 
+// Load from cache or fetch from API (returns cached reference)
 let network: NetworkRef = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
 
+// Always fetch fresh (bypasses cache)
 let network: RoadNetwork = RoadNetwork::fetch(&bbox, &config, None).await?;
 ```
 
-`NetworkRef` is a zero-cost guard that provides access to the cached `RoadNetwork`. It implements `Deref<Target = RoadNetwork>` so all `RoadNetwork` methods are available directly.
+`NetworkRef` is a zero-cost guard that provides access to the cached `RoadNetwork`. It implements `Deref<Target = RoadNetwork>` so all methods are available directly.
 
-#### Single Route
+#### Routing
 
 ```rust
-use solverforge_maps::{Coord, RouteResult};
+use solverforge_maps::{Coord, RouteResult, RoutingError, Objective};
 
 let from = Coord::new(39.95, -75.16);
 let to = Coord::new(39.96, -75.17);
 
-if let Some(route) = network.route(from, to) {
-    println!("Duration: {} seconds", route.duration_seconds);
-    println!("Distance: {:.0} meters", route.distance_meters);
-    println!("Geometry: {} points", route.geometry.len());
-}
+// Route by minimum travel time (default)
+let route: Result<RouteResult, RoutingError> = network.route(from, to);
+
+// Route with specific objective
+let route = network.route_with(from, to, Objective::Time)?;     // Minimize time
+let route = network.route_with(from, to, Objective::Distance)?; // Minimize distance
+
+// Access route data
+println!("Duration: {} seconds", route.duration_seconds);
+println!("Distance: {:.0} meters", route.distance_meters);
+println!("Geometry: {} points", route.geometry.len());
+
+// Simplify geometry for transmission (Douglas-Peucker algorithm)
+let simplified = route.simplify(10.0);  // tolerance in meters
 ```
 
-#### Travel Time Matrix
+#### Coordinate Snapping
 
 ```rust
-use solverforge_maps::{Coord, TravelTimeMatrix};
+use solverforge_maps::{Coord, SnappedCoord, RoutingError};
+
+let coord = Coord::new(39.95, -75.16);
+
+// Simple snap (returns None if network is empty)
+let node = network.snap_to_road(coord);
+
+// Detailed snap with distance information
+let snapped: Result<SnappedCoord, RoutingError> = network.snap_to_road_detailed(coord);
+
+if let Ok(snap) = snapped {
+    println!("Original: {:?}", snap.original);
+    println!("Snapped: {:?}", snap.snapped);
+    println!("Snap distance: {:.1} meters", snap.snap_distance_m);
+}
+
+// Route between pre-snapped coordinates (more efficient for repeated routing)
+let from_snap = network.snap_to_road_detailed(from)?;
+let to_snap = network.snap_to_road_detailed(to)?;
+let route = network.route_snapped(&from_snap, &to_snap)?;
+```
+
+#### Network Statistics
+
+```rust
+let nodes: usize = network.node_count();
+let edges: usize = network.edge_count();
+
+// Connectivity analysis (useful for debugging routing failures)
+let components: usize = network.strongly_connected_components();
+let largest_fraction: f64 = network.largest_component_fraction();
+let is_connected: bool = network.is_strongly_connected();
+
+println!("Network has {} SCCs", components);
+println!("Largest component contains {:.1}% of nodes", largest_fraction * 100.0);
+```
+
+---
+
+### TravelTimeMatrix
+
+Travel time matrix with metadata and analysis methods.
+
+```rust
+use solverforge_maps::{Coord, TravelTimeMatrix, UNREACHABLE};
 
 let locations = vec![
     Coord::new(39.95, -75.16),
@@ -172,14 +291,44 @@ let locations = vec![
     Coord::new(39.94, -75.15),
 ];
 
+// Async computation
 let matrix: TravelTimeMatrix = network.compute_matrix(&locations, None).await;
 
+// Sync computation
 let matrix: TravelTimeMatrix = network.compute_matrix_sync(&locations);
+
+// Parallel computation (faster for large matrices)
+let matrix: TravelTimeMatrix = network.compute_matrix_parallel(&locations);
+
+// Access travel times
+let time: Option<i64> = matrix.get(0, 1);           // From location 0 to 1
+let row: Option<&[i64]> = matrix.row(0);            // All times from location 0
+let reachable: bool = matrix.is_reachable(0, 1);    // Check if pair is reachable
+
+// Matrix metadata
+let size: usize = matrix.size();                     // Number of locations
+let locations: &[SnappedCoord] = matrix.locations(); // Snapped coordinates
+
+// Statistics (excluding diagonal and unreachable pairs)
+let min: Option<i64> = matrix.min();
+let max: Option<i64> = matrix.max();
+let mean: Option<f64> = matrix.mean();
+
+// Reachability analysis
+let ratio: f64 = matrix.reachability_ratio();                 // Fraction reachable
+let unreachable: Vec<(usize, usize)> = matrix.unreachable_pairs();
+
+// Raw data access
+let data: &[i64] = matrix.as_slice();  // Row-major flat array
 ```
 
-`TravelTimeMatrix` is `Vec<Vec<i64>>` where `matrix[i][j]` is travel time in seconds from location `i` to location `j`. Returns `-1` for unreachable pairs.
+The constant `UNREACHABLE` (`i64::MAX`) indicates pairs with no path.
 
-#### Route Geometries
+---
+
+### Route Geometries
+
+Compute geometries for all location pairs.
 
 ```rust
 use solverforge_maps::Coord;
@@ -190,63 +339,97 @@ let locations = vec![
     Coord::new(39.96, -75.17),
 ];
 
+// Async computation
 let geometries: HashMap<(usize, usize), Vec<Coord>> =
     network.compute_geometries(&locations, None).await;
 
-let route_0_to_1: &Vec<Coord> = &geometries[&(0, 1)];
+// Sync computation
+let geometries = network.compute_geometries_sync(&locations);
+
+// Access specific route geometry
+if let Some(route_geom) = geometries.get(&(0, 1)) {
+    println!("Route 0->1 has {} points", route_geom.len());
+}
 ```
 
-#### Network Statistics
+---
+
+### Cache Management
+
+Inspect and manage the network cache.
 
 ```rust
-let nodes: usize = network.node_count();
-let edges: usize = network.edge_count();
+use solverforge_maps::{RoadNetwork, CacheStats, BoundingBox};
+
+// Get cache statistics
+let stats: CacheStats = RoadNetwork::cache_stats().await;
+println!("Cached networks: {}", stats.networks_cached);
+println!("Total nodes: {}", stats.total_nodes);
+println!("Total edges: {}", stats.total_edges);
+println!("Memory: {} bytes", stats.memory_bytes);
+println!("Hits: {}, Misses: {}", stats.hits, stats.misses);
+
+// List cached regions
+let regions: Vec<BoundingBox> = RoadNetwork::cached_regions().await;
+
+// Evict specific region
+let bbox = BoundingBox::new(39.9, -75.2, 40.0, -75.1);
+let evicted: bool = RoadNetwork::evict(&bbox).await;
+
+// Clear entire cache
+RoadNetwork::clear_cache().await;
 ```
+
+---
 
 ### Progress Reporting
 
 Stream progress updates during long operations.
 
 ```rust
-use solverforge_maps::{BoundingBox, Coord, NetworkConfig, RoadNetwork, RoutingProgress};
+use solverforge_maps::{BoundingBox, NetworkConfig, RoadNetwork, RoutingProgress};
 use tokio::sync::mpsc;
 
 let (tx, mut rx) = mpsc::channel::<RoutingProgress>(100);
 
 tokio::spawn(async move {
     while let Some(progress) = rx.recv().await {
-        let (phase, message) = progress.phase_message();
-        println!("[{:3}%] {}: {}", progress.percent(), phase, message);
-        if let Some(detail) = progress.detail() {
-            println!("       {}", detail);
+        match progress {
+            RoutingProgress::CheckingCache { percent } => {
+                println!("[{:3}%] Checking cache...", percent);
+            }
+            RoutingProgress::DownloadingNetwork { percent, bytes } => {
+                println!("[{:3}%] Downloading... {} bytes", percent, bytes);
+            }
+            RoutingProgress::BuildingGraph { percent } => {
+                println!("[{:3}%] Building graph...", percent);
+            }
+            RoutingProgress::ComputingMatrix { percent, row, total } => {
+                println!("[{:3}%] Computing matrix row {}/{}", percent, row, total);
+            }
+            _ => {}
         }
     }
 });
 
-let bbox = BoundingBox::new(39.9, -75.2, 40.0, -75.1);
-let config = NetworkConfig::default();
-
 let network = RoadNetwork::load_or_fetch(&bbox, &config, Some(&tx)).await?;
-
-let locations = vec![
-    Coord::new(39.95, -75.16),
-    Coord::new(39.96, -75.17),
-];
 let matrix = network.compute_matrix(&locations, Some(&tx)).await;
 ```
 
-#### RoutingProgress Phases
+#### RoutingProgress Variants
 
-| Phase | Description |
-|-------|-------------|
-| `CheckingCache` | Checking in-memory and file caches |
-| `DownloadingNetwork` | Downloading from Overpass API |
-| `ParsingOsm` | Parsing OSM JSON response |
-| `BuildingGraph` | Building routing graph |
-| `ComputingMatrix` | Computing travel time matrix |
-| `ComputingGeometries` | Computing route geometries |
-| `EncodingGeometries` | Encoding geometries to polylines |
+| Variant | Description |
+|---------|-------------|
+| `CheckingCache { percent }` | Checking in-memory and file caches |
+| `DownloadingNetwork { percent, bytes }` | Downloading from Overpass API |
+| `ParsingOsm { percent, nodes, edges }` | Parsing OSM JSON response |
+| `BuildingGraph { percent }` | Building routing graph |
+| `ComputingMatrix { percent, row, total }` | Computing travel time matrix |
+| `ComputingGeometries { percent, pair, total }` | Computing route geometries |
+| `EncodingGeometries { percent }` | Encoding geometries to polylines |
 | `Complete` | Operation finished |
+
+---
 
 ### Polyline Encoding
 
@@ -260,29 +443,12 @@ let coords = vec![
     Coord::new(40.7, -120.95),
     Coord::new(43.252, -126.453),
 ];
-let encoded: String = encode_polyline(&coords);
 
+let encoded: String = encode_polyline(&coords);
 let decoded: Vec<Coord> = decode_polyline(&encoded);
 ```
 
-### EncodedSegment
-
-Pre-encoded route segment for API responses.
-
-```rust
-use solverforge_maps::{EncodedSegment, Coord};
-
-let coords = vec![
-    Coord::new(39.95, -75.16),
-    Coord::new(39.96, -75.17),
-];
-
-let segment = EncodedSegment::new(0, "Vehicle A", &coords);
-
-println!("Entity: {} (idx {})", segment.entity_name, segment.entity_idx);
-println!("Polyline: {}", segment.polyline);
-println!("Points: {}", segment.point_count);
-```
+---
 
 ### Haversine Distance
 
@@ -296,8 +462,11 @@ let b = Coord::new(39.9496, -75.1503);
 
 let distance_meters = haversine_distance(a, b);
 
+// Or use the method on Coord
 let distance_meters = a.distance_to(b);
 ```
+
+---
 
 ### Error Handling
 
@@ -305,143 +474,95 @@ let distance_meters = a.distance_to(b);
 use solverforge_maps::{RoutingError, RoutingResult};
 
 fn example() -> RoutingResult<()> {
-    // ... operations that may fail
     Ok(())
 }
 
-match RoadNetwork::load_or_fetch(&bbox, &config, None).await {
-    Ok(network) => { /* use network */ }
+match network.route(from, to) {
+    Ok(route) => { /* use route */ }
+    Err(RoutingError::SnapFailed { coord, nearest_distance_m }) => {
+        eprintln!("Could not snap {:?} to road network", coord);
+        if let Some(dist) = nearest_distance_m {
+            eprintln!("Nearest node was {} meters away", dist);
+        }
+    }
+    Err(RoutingError::NoPath { from, to }) => {
+        eprintln!("No path exists from {:?} to {:?}", from, to);
+    }
+    Err(RoutingError::InvalidCoordinate { error }) => {
+        eprintln!("Invalid coordinate: {}", error);
+    }
     Err(RoutingError::Network(msg)) => {
         eprintln!("Network error: {}", msg);
     }
     Err(RoutingError::Parse(msg)) => {
-        eprintln!("Failed to parse OSM data: {}", msg);
+        eprintln!("Parse error: {}", msg);
     }
     Err(RoutingError::Io(e)) => {
         eprintln!("I/O error: {}", e);
     }
-    Err(RoutingError::NoRoute) => {
-        eprintln!("No route found");
+    Err(RoutingError::Cancelled) => {
+        eprintln!("Operation cancelled");
     }
 }
 ```
 
-## Types Reference
+---
 
-### Core Types
+## Types Summary
 
-```rust
-pub struct Coord {
-    pub lat: f64,
-    pub lng: f64,
-}
+### Structs
 
-pub struct BoundingBox {
-    pub min_lat: f64,
-    pub min_lng: f64,
-    pub max_lat: f64,
-    pub max_lng: f64,
-}
-
-pub struct NetworkConfig {
-    pub overpass_url: String,
-    pub cache_dir: PathBuf,
-    pub connect_timeout: Duration,
-    pub read_timeout: Duration,
-    pub speed_profile: SpeedProfile,
-    pub highway_types: Vec<&'static str>,
-}
-
-pub struct RoadNetwork { /* routing graph */ }
-
-pub struct NetworkRef { /* zero-cost cache guard */ }
-
-pub struct RouteResult {
-    pub duration_seconds: i64,
-    pub distance_meters: f64,
-    pub geometry: Vec<Coord>,
-}
-
-pub struct EncodedSegment {
-    pub entity_idx: usize,
-    pub entity_name: String,
-    pub polyline: String,
-    pub point_count: usize,
-}
-```
+| Type | Description |
+|------|-------------|
+| `Coord` | Geographic coordinate (lat, lng) |
+| `BoundingBox` | Rectangular geographic region |
+| `NetworkConfig` | Configuration for network loading |
+| `SpeedProfile` | Road type speed mapping |
+| `RoadNetwork` | Core routing graph |
+| `NetworkRef` | Zero-cost reference to cached network |
+| `RouteResult` | Single route with geometry |
+| `SnappedCoord` | Coordinate snapped to road network |
+| `TravelTimeMatrix` | N x N travel time matrix |
+| `CacheStats` | Cache statistics and metrics |
+| `EncodedSegment` | Pre-encoded route segment |
 
 ### Enums
 
-```rust
-pub enum SpeedProfile {
-    Default,
-    Custom {
-        motorway_kmh: f64,
-        trunk_kmh: f64,
-        primary_kmh: f64,
-        secondary_kmh: f64,
-        tertiary_kmh: f64,
-        residential_kmh: f64,
-        service_kmh: f64,
-        default_kmh: f64,
-    },
-}
+| Type | Description |
+|------|-------------|
+| `CoordError` | Coordinate validation errors |
+| `BBoxError` | Bounding box validation errors |
+| `RoutingError` | Routing operation errors |
+| `RoutingProgress` | Progress reporting events |
+| `Objective` | Routing objective (Time, Distance) |
 
-pub enum RoutingProgress {
-    CheckingCache { percent: u8 },
-    DownloadingNetwork { percent: u8, bytes: usize },
-    ParsingOsm { percent: u8, nodes: usize, edges: usize },
-    BuildingGraph { percent: u8 },
-    ComputingMatrix { percent: u8, row: usize, total: usize },
-    ComputingGeometries { percent: u8, pair: usize, total: usize },
-    EncodingGeometries { percent: u8 },
-    Complete,
-}
+### Constants
 
-pub enum RoutingError {
-    Network(String),
-    Parse(String),
-    Io(std::io::Error),
-    NoRoute,
-}
-```
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `UNREACHABLE` | `i64::MAX` | Sentinel for unreachable pairs |
 
-### Type Aliases
-
-```rust
-pub type RoutingResult<T> = Result<T, RoutingError>;
-pub type TravelTimeMatrix = Vec<Vec<i64>>;
-```
+---
 
 ## Caching
 
 Three-tier caching for performance:
 
-1. **In-Memory Cache**: Instant lookup for repeated requests in the same process
-2. **File Cache**: Persists to configured `cache_dir` (default `.osm_cache/`), survives restarts
-3. **Overpass API**: Downloads fresh data when cache misses
-
-Cache files are automatically invalidated when the format version changes.
+1. **In-Memory Cache**: Instant lookup for repeated requests
+2. **File Cache**: Persists to `cache_dir` (default `.osm_cache/`)
+3. **Overpass API**: Downloads fresh data on cache miss
 
 ```bash
+# Clear file cache
 rm -rf .osm_cache/
 ```
 
-## Default Highway Speeds
+```rust
+// Or programmatically
+RoadNetwork::clear_cache().await;
+```
 
-| Highway Type | Speed |
-|-------------|-------|
-| motorway | 100 km/h |
-| trunk | 80 km/h |
-| primary | 60 km/h |
-| secondary | 50 km/h |
-| tertiary | 40 km/h |
-| residential | 30 km/h |
-| unclassified | 30 km/h |
-| service | 20 km/h |
-| living_street | 10 km/h |
-
-Use `SpeedProfile::Custom` to override these defaults.
+---
 
 ## License
 
