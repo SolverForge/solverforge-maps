@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Speed profile for different highway types (km/h).
 #[derive(Debug, Clone)]
 pub struct SpeedProfile {
     pub motorway: f64,
@@ -53,7 +52,6 @@ impl SpeedProfile {
     }
 }
 
-/// Configuration for network fetching and caching.
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
     pub overpass_url: String,

@@ -3,20 +3,13 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Error type for coordinate validation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoordError {
-    /// Latitude out of valid range [-90, 90].
     LatOutOfRange { value: f64 },
-    /// Longitude out of valid range [-180, 180].
     LngOutOfRange { value: f64 },
-    /// Latitude is NaN.
     LatNaN,
-    /// Longitude is NaN.
     LngNaN,
-    /// Latitude is infinite.
     LatInfinite { value: f64 },
-    /// Longitude is infinite.
     LngInfinite { value: f64 },
 }
 
@@ -39,7 +32,6 @@ impl fmt::Display for CoordError {
 
 impl std::error::Error for CoordError {}
 
-/// A geographic coordinate with latitude and longitude.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Coord {
     pub lat: f64,

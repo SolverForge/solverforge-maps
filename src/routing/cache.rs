@@ -12,7 +12,7 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 use super::bbox::BoundingBox;
 use super::network::RoadNetwork;
 
-pub const CACHE_VERSION: u32 = 3;
+pub const CACHE_VERSION: u32 = 4;
 
 static NETWORK_CACHE: OnceLock<RwLock<HashMap<String, RoadNetwork>>> = OnceLock::new();
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
@@ -30,25 +30,17 @@ pub(crate) fn record_miss() {
     CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Statistics about the network cache.
 #[derive(Debug, Clone)]
 pub struct CacheStats {
-    /// Number of networks currently cached.
     pub networks_cached: usize,
-    /// Total number of nodes across all cached networks.
     pub total_nodes: usize,
-    /// Total number of edges across all cached networks.
     pub total_edges: usize,
-    /// Estimated memory usage in bytes.
     pub memory_bytes: usize,
-    /// Number of cache hits since start.
     pub hits: u64,
-    /// Number of cache misses since start.
     pub misses: u64,
 }
 
 impl CacheStats {
-    /// Cache hit ratio (0.0 to 1.0).
     pub fn hit_ratio(&self) -> f64 {
         let total = self.hits + self.misses;
         if total == 0 {
@@ -114,7 +106,6 @@ pub struct CachedEdge {
 }
 
 impl RoadNetwork {
-    /// Get statistics about the network cache.
     pub async fn cache_stats() -> CacheStats {
         let guard = cache().read().await;
 
@@ -143,22 +134,17 @@ impl RoadNetwork {
         }
     }
 
-    /// Clear all cached networks.
     pub async fn clear_cache() {
         let mut guard = cache().write().await;
         guard.clear();
     }
 
-    /// Evict a specific bounding box from the cache.
-    ///
-    /// Returns `true` if the network was present and removed.
     pub async fn evict(bbox: &BoundingBox) -> bool {
         let cache_key = bbox.cache_key();
         let mut guard = cache().write().await;
         guard.remove(&cache_key).is_some()
     }
 
-    /// Get all cached bounding boxes.
     pub async fn cached_regions() -> Vec<BoundingBox> {
         let guard = cache().read().await;
         guard
@@ -168,7 +154,6 @@ impl RoadNetwork {
     }
 }
 
-/// Parse a cache key back into a BoundingBox.
 fn parse_cache_key(key: &str) -> Option<BoundingBox> {
     let parts: Vec<&str> = key.split('_').collect();
     if parts.len() != 4 {

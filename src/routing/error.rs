@@ -2,25 +2,22 @@
 
 use super::coord::{Coord, CoordError};
 
-/// Error type for routing operations.
 #[derive(Debug)]
 pub enum RoutingError {
-    /// Network request failed.
     Network(String),
-    /// Failed to parse OSM data.
     Parse(String),
-    /// I/O error.
     Io(std::io::Error),
-    /// Failed to snap coordinate to road network.
     SnapFailed {
         coord: Coord,
         nearest_distance_m: Option<f64>,
     },
-    /// No path found between coordinates.
-    NoPath { from: Coord, to: Coord },
-    /// Invalid coordinate provided.
-    InvalidCoordinate { error: CoordError },
-    /// Operation was cancelled.
+    NoPath {
+        from: Coord,
+        to: Coord,
+    },
+    InvalidCoordinate {
+        error: CoordError,
+    },
     Cancelled,
 }
 
