@@ -2,8 +2,6 @@
 
 use super::coord::Coord;
 
-pub const DEFAULT_SPEED_MPS: f64 = 50.0 * 1000.0 / 3600.0;
-
 pub fn coord_key(lat: f64, lng: f64) -> (i64, i64) {
     ((lat * 1e7).round() as i64, (lng * 1e7).round() as i64)
 }

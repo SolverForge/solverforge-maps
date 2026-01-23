@@ -1,8 +1,49 @@
 //! Bounding box for geographic queries.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use super::coord::Coord;
+
+/// Error type for bounding box validation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BBoxError {
+    /// Minimum latitude is greater than maximum latitude.
+    MinLatGreaterThanMax { min: f64, max: f64 },
+    /// Minimum longitude is greater than maximum longitude.
+    MinLngGreaterThanMax { min: f64, max: f64 },
+    /// Latitude out of valid range [-90, 90].
+    LatOutOfRange { value: f64 },
+    /// Longitude out of valid range [-180, 180].
+    LngOutOfRange { value: f64 },
+    /// Value is NaN.
+    NaN { field: &'static str },
+    /// Value is infinite.
+    Infinite { field: &'static str, value: f64 },
+}
+
+impl fmt::Display for BBoxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BBoxError::MinLatGreaterThanMax { min, max } => {
+                write!(f, "min_lat {} is greater than max_lat {}", min, max)
+            }
+            BBoxError::MinLngGreaterThanMax { min, max } => {
+                write!(f, "min_lng {} is greater than max_lng {}", min, max)
+            }
+            BBoxError::LatOutOfRange { value } => {
+                write!(f, "latitude {} out of valid range [-90, 90]", value)
+            }
+            BBoxError::LngOutOfRange { value } => {
+                write!(f, "longitude {} out of valid range [-180, 180]", value)
+            }
+            BBoxError::NaN { field } => write!(f, "{} is NaN", field),
+            BBoxError::Infinite { field, value } => write!(f, "{} {} is infinite", field, value),
+        }
+    }
+}
+
+impl std::error::Error for BBoxError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoundingBox {
@@ -13,13 +54,106 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
-    pub const fn new(min_lat: f64, min_lng: f64, max_lat: f64, max_lng: f64) -> Self {
-        Self {
+    /// Creates a new bounding box, panicking on invalid input.
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// - Any value is NaN or infinite
+    /// - `min_lat > max_lat`
+    /// - `min_lng > max_lng`
+    /// - Latitude values are outside [-90, 90]
+    /// - Longitude values are outside [-180, 180]
+    pub fn new(min_lat: f64, min_lng: f64, max_lat: f64, max_lng: f64) -> Self {
+        match Self::try_new(min_lat, min_lng, max_lat, max_lng) {
+            Ok(bbox) => bbox,
+            Err(e) => panic!("invalid bounding box: {}", e),
+        }
+    }
+
+    /// Attempts to create a new bounding box with validation.
+    pub fn try_new(
+        min_lat: f64,
+        min_lng: f64,
+        max_lat: f64,
+        max_lng: f64,
+    ) -> Result<Self, BBoxError> {
+        // Check NaN
+        if min_lat.is_nan() {
+            return Err(BBoxError::NaN { field: "min_lat" });
+        }
+        if min_lng.is_nan() {
+            return Err(BBoxError::NaN { field: "min_lng" });
+        }
+        if max_lat.is_nan() {
+            return Err(BBoxError::NaN { field: "max_lat" });
+        }
+        if max_lng.is_nan() {
+            return Err(BBoxError::NaN { field: "max_lng" });
+        }
+
+        // Check infinite
+        if min_lat.is_infinite() {
+            return Err(BBoxError::Infinite {
+                field: "min_lat",
+                value: min_lat,
+            });
+        }
+        if min_lng.is_infinite() {
+            return Err(BBoxError::Infinite {
+                field: "min_lng",
+                value: min_lng,
+            });
+        }
+        if max_lat.is_infinite() {
+            return Err(BBoxError::Infinite {
+                field: "max_lat",
+                value: max_lat,
+            });
+        }
+        if max_lng.is_infinite() {
+            return Err(BBoxError::Infinite {
+                field: "max_lng",
+                value: max_lng,
+            });
+        }
+
+        // Check latitude range
+        if !(-90.0..=90.0).contains(&min_lat) {
+            return Err(BBoxError::LatOutOfRange { value: min_lat });
+        }
+        if !(-90.0..=90.0).contains(&max_lat) {
+            return Err(BBoxError::LatOutOfRange { value: max_lat });
+        }
+
+        // Check longitude range
+        if !(-180.0..=180.0).contains(&min_lng) {
+            return Err(BBoxError::LngOutOfRange { value: min_lng });
+        }
+        if !(-180.0..=180.0).contains(&max_lng) {
+            return Err(BBoxError::LngOutOfRange { value: max_lng });
+        }
+
+        // Check min < max
+        if min_lat > max_lat {
+            return Err(BBoxError::MinLatGreaterThanMax {
+                min: min_lat,
+                max: max_lat,
+            });
+        }
+        if min_lng > max_lng {
+            return Err(BBoxError::MinLngGreaterThanMax {
+                min: min_lng,
+                max: max_lng,
+            });
+        }
+
+        Ok(Self {
             min_lat,
             min_lng,
             max_lat,
             max_lng,
-        }
+        })
     }
 
     pub fn from_coords(coords: &[Coord]) -> Self {
@@ -60,6 +194,47 @@ impl BoundingBox {
             max_lat: self.max_lat + lat_pad,
             max_lng: self.max_lng + lng_pad,
         }
+    }
+
+    /// Expand by meters (converts to degrees at this latitude).
+    pub fn expand_meters(self, meters: f64) -> Self {
+        // 1 degree of latitude is approximately 111,320 meters
+        let lat_deg = meters / 111_320.0;
+
+        // 1 degree of longitude varies by latitude
+        // Use the center latitude for calculation
+        let center_lat = (self.min_lat + self.max_lat) / 2.0;
+        let lng_deg = meters / (111_320.0 * center_lat.to_radians().cos());
+
+        Self {
+            min_lat: self.min_lat - lat_deg,
+            min_lng: self.min_lng - lng_deg,
+            max_lat: self.max_lat + lat_deg,
+            max_lng: self.max_lng + lng_deg,
+        }
+    }
+
+    /// Expand to ensure all pairwise routes between locations fit.
+    /// Uses road network detour factor of 1.4 (empirical).
+    pub fn expand_for_routing(self, locations: &[Coord]) -> Self {
+        const DETOUR_FACTOR: f64 = 1.4;
+
+        if locations.len() < 2 {
+            return self;
+        }
+
+        // Find maximum pairwise distance
+        let mut max_distance: f64 = 0.0;
+        for i in 0..locations.len() {
+            for j in (i + 1)..locations.len() {
+                let dist = locations[i].distance_to(locations[j]);
+                max_distance = max_distance.max(dist);
+            }
+        }
+
+        // Expand by detour factor applied to max distance
+        let expansion = max_distance * (DETOUR_FACTOR - 1.0) / 2.0;
+        self.expand_meters(expansion)
     }
 
     pub fn center(&self) -> Coord {

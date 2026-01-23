@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use solverforge_maps::{
-    decode_polyline, encode_polyline, haversine_distance, BoundingBox, Coord, NetworkConfig,
-    RoadNetwork, SpeedProfile,
+    decode_polyline, encode_polyline, haversine_distance, BBoxError, BoundingBox, Coord,
+    CoordError, NetworkConfig, RoadNetwork, RoutingError, SpeedProfile, UNREACHABLE,
 };
 
 mod coord {
@@ -19,10 +19,46 @@ mod coord {
     }
 
     #[test]
-    fn from_tuple() {
-        let coord: Coord = (39.95, -75.16).into();
+    fn try_new_valid() {
+        let coord = Coord::try_new(39.95, -75.16).unwrap();
         assert!((coord.lat - 39.95).abs() < f64::EPSILON);
         assert!((coord.lng - (-75.16)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn try_new_invalid_lat() {
+        let result = Coord::try_new(91.0, -75.16);
+        assert!(matches!(result, Err(CoordError::LatOutOfRange { .. })));
+    }
+
+    #[test]
+    fn try_new_invalid_lng() {
+        let result = Coord::try_new(39.95, 181.0);
+        assert!(matches!(result, Err(CoordError::LngOutOfRange { .. })));
+    }
+
+    #[test]
+    fn try_new_nan() {
+        let result = Coord::try_new(f64::NAN, -75.16);
+        assert!(matches!(result, Err(CoordError::LatNaN)));
+    }
+
+    #[test]
+    fn try_new_infinite() {
+        let result = Coord::try_new(f64::INFINITY, -75.16);
+        assert!(matches!(result, Err(CoordError::LatInfinite { .. })));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid coordinate")]
+    fn new_panics_on_invalid() {
+        Coord::new(91.0, -75.16);
+    }
+
+    #[test]
+    fn try_from_tuple() {
+        let coord: Result<Coord, _> = (39.95, -75.16).try_into();
+        assert!(coord.is_ok());
     }
 
     #[test]
@@ -87,6 +123,22 @@ mod bbox {
     }
 
     #[test]
+    fn expand_meters() {
+        let bbox = BoundingBox::new(39.9, -75.2, 40.0, -75.1);
+        let expanded = bbox.expand_meters(1000.0);
+        assert!(expanded.min_lat < bbox.min_lat);
+        assert!(expanded.max_lat > bbox.max_lat);
+    }
+
+    #[test]
+    fn expand_for_routing() {
+        let locations = vec![Coord::new(39.95, -75.16), Coord::new(39.96, -75.17)];
+        let bbox = BoundingBox::from_coords(&locations);
+        let expanded = bbox.expand_for_routing(&locations);
+        assert!(expanded.min_lat < bbox.min_lat);
+    }
+
+    #[test]
     fn from_coords() {
         let coords = vec![
             Coord::new(39.95, -75.16),
@@ -113,6 +165,24 @@ mod bbox {
         let center = bbox.center();
         assert!((center.lat - 39.95).abs() < f64::EPSILON);
         assert!((center.lng - (-75.1)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn try_new_valid() {
+        let bbox = BoundingBox::try_new(39.9, -75.2, 40.0, -75.1);
+        assert!(bbox.is_ok());
+    }
+
+    #[test]
+    fn try_new_min_greater_than_max() {
+        let bbox = BoundingBox::try_new(40.0, -75.2, 39.9, -75.1);
+        assert!(matches!(bbox, Err(BBoxError::MinLatGreaterThanMax { .. })));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid bounding box")]
+    fn new_panics_on_invalid() {
+        BoundingBox::new(40.0, -75.2, 39.9, -75.1);
     }
 }
 
@@ -150,6 +220,27 @@ mod network {
         let network = RoadNetwork::new();
         assert!(network.snap_to_road(Coord::new(39.95, -75.16)).is_none());
     }
+
+    #[test]
+    fn snap_to_road_detailed_empty() {
+        let network = RoadNetwork::new();
+        let result = network.snap_to_road_detailed(Coord::new(39.95, -75.16));
+        assert!(matches!(result, Err(RoutingError::SnapFailed { .. })));
+    }
+
+    #[test]
+    fn route_empty_network() {
+        let network = RoadNetwork::new();
+        let result = network.route(Coord::new(39.95, -75.16), Coord::new(39.96, -75.17));
+        assert!(matches!(result, Err(RoutingError::SnapFailed { .. })));
+    }
+
+    #[test]
+    fn connectivity_empty() {
+        let network = RoadNetwork::new();
+        assert_eq!(network.strongly_connected_components(), 0);
+        assert!((network.largest_component_fraction() - 0.0).abs() < f64::EPSILON);
+    }
 }
 
 mod matrix {
@@ -160,7 +251,7 @@ mod matrix {
         let network = RoadNetwork::new();
         let locations: Vec<Coord> = vec![];
         let matrix = network.compute_matrix_sync(&locations);
-        assert!(matrix.is_empty());
+        assert_eq!(matrix.size(), 0);
     }
 
     #[test]
@@ -168,8 +259,8 @@ mod matrix {
         let network = RoadNetwork::new();
         let locations = vec![Coord::new(39.95, -75.16)];
         let matrix = network.compute_matrix_sync(&locations);
-        assert_eq!(matrix.len(), 1);
-        assert_eq!(matrix[0][0], 0);
+        assert_eq!(matrix.size(), 1);
+        assert_eq!(matrix.get(0, 0), Some(0));
     }
 
     #[test]
@@ -177,11 +268,24 @@ mod matrix {
         let network = RoadNetwork::new();
         let locations = vec![Coord::new(39.95, -75.16), Coord::new(39.96, -75.17)];
         let matrix = network.compute_matrix_sync(&locations);
-        assert_eq!(matrix.len(), 2);
-        assert_eq!(matrix[0][0], 0);
-        assert_eq!(matrix[1][1], 0);
-        assert!(matrix[0][1] > 0);
-        assert!(matrix[1][0] > 0);
+        assert_eq!(matrix.size(), 2);
+        assert_eq!(matrix.get(0, 0), Some(0));
+        assert_eq!(matrix.get(1, 1), Some(0));
+        // Unreachable since network is empty
+        assert_eq!(matrix.get(0, 1), Some(UNREACHABLE));
+        assert_eq!(matrix.get(1, 0), Some(UNREACHABLE));
+    }
+
+    #[test]
+    fn matrix_methods() {
+        let network = RoadNetwork::new();
+        let locations = vec![Coord::new(39.95, -75.16)];
+        let matrix = network.compute_matrix_sync(&locations);
+
+        assert_eq!(matrix.size(), 1);
+        assert!(matrix.row(0).is_some());
+        assert!(matrix.row(1).is_none());
+        assert!(matrix.locations().len() == 1);
     }
 }
 
@@ -234,5 +338,38 @@ mod geometry {
         assert_eq!(decoded.len(), 1);
         assert!(decoded[0].lat.abs() < 0.00001);
         assert!(decoded[0].lng.abs() < 0.00001);
+    }
+}
+
+mod route_simplify {
+    use super::*;
+    use solverforge_maps::RouteResult;
+
+    #[test]
+    fn simplify_short_route() {
+        let route = RouteResult {
+            duration_seconds: 100,
+            distance_meters: 1000.0,
+            geometry: vec![Coord::new(39.95, -75.16), Coord::new(39.96, -75.17)],
+        };
+
+        let simplified = route.simplify(10.0);
+        assert_eq!(simplified.geometry.len(), 2);
+    }
+
+    #[test]
+    fn simplify_preserves_endpoints() {
+        let first = Coord::new(39.95, -75.16);
+        let last = Coord::new(39.96, -75.17);
+        let route = RouteResult {
+            duration_seconds: 100,
+            distance_meters: 1000.0,
+            geometry: vec![first, Coord::new(39.955, -75.165), last],
+        };
+
+        let simplified = route.simplify(10000.0);
+        assert!(simplified.geometry.len() >= 2);
+        assert_eq!(simplified.geometry[0], first);
+        assert_eq!(simplified.geometry[simplified.geometry.len() - 1], last);
     }
 }

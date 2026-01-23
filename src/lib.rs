@@ -17,9 +17,9 @@
 //!
 //!     let network = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
 //!     let matrix = network.compute_matrix(&locations, None).await;
-//!     let route = network.route(locations[0], locations[1]);
+//!     let route = network.route(locations[0], locations[1])?;
 //!
-//!     println!("Matrix: {:?}", matrix);
+//!     println!("Matrix size: {}", matrix.size());
 //!     println!("Route: {:?}", route);
 //!     Ok(())
 //! }
@@ -30,6 +30,7 @@ pub mod routing;
 
 pub use geometry::{decode_polyline, encode_polyline, EncodedSegment};
 pub use routing::{
-    haversine_distance, BoundingBox, Coord, NetworkConfig, NetworkRef, RoadNetwork, RouteResult,
-    RoutingError, RoutingProgress, RoutingResult, SpeedProfile, TravelTimeMatrix,
+    haversine_distance, BBoxError, BoundingBox, CacheStats, Coord, CoordError, NetworkConfig,
+    NetworkRef, Objective, RoadNetwork, RouteResult, RoutingError, RoutingProgress, RoutingResult,
+    SnappedCoord, SpeedProfile, TravelTimeMatrix, UNREACHABLE,
 };
