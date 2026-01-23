@@ -53,20 +53,14 @@ impl RouteResult {
     }
 }
 
-/// A coordinate that has been snapped to the road network.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SnappedCoord {
-    /// The original coordinate before snapping.
     pub original: Coord,
-    /// The snapped coordinate on the road network.
     pub snapped: Coord,
-    /// Distance between original and snapped coordinates in meters.
     pub snap_distance_m: f64,
-    /// Internal node index (not exposed to users).
     pub(crate) node_index: NodeIndex,
 }
 
-/// A point in the R-tree spatial index.
 #[derive(Debug, Clone, Copy, Default)]
 struct RTreePoint {
     lat: f64,
@@ -90,19 +84,14 @@ impl PointDistance for RTreePoint {
     }
 }
 
-/// A road segment in the R-tree spatial index for edge-based snapping.
 #[derive(Debug, Clone, Copy)]
 struct RTreeSegment {
-    /// Start point of the segment
     from_lat: f64,
     from_lng: f64,
-    /// End point of the segment
     to_lat: f64,
     to_lng: f64,
-    /// Graph node indices
     from_node: NodeIndex,
     to_node: NodeIndex,
-    /// Edge index for looking up edge data
     edge_index: EdgeIndex,
 }
 
@@ -151,22 +140,14 @@ impl PointDistance for RTreeSegment {
     }
 }
 
-/// A location snapped to a road segment (edge-based snapping).
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeSnappedLocation {
-    /// The original coordinate before snapping.
     pub original: Coord,
-    /// The snapped coordinate on the road segment.
     pub snapped: Coord,
-    /// Distance between original and snapped coordinates in meters.
     pub snap_distance_m: f64,
-    /// The edge we snapped to.
     pub(crate) edge_index: EdgeIndex,
-    /// Position along edge (0.0 = from_node, 1.0 = to_node).
     pub(crate) position: f64,
-    /// The from-node of the edge.
     pub(crate) from_node: NodeIndex,
-    /// The to-node of the edge.
     pub(crate) to_node: NodeIndex,
 }
 
@@ -174,7 +155,6 @@ pub struct RoadNetwork {
     pub(super) graph: DiGraph<NodeData, EdgeData>,
     pub(super) coord_to_node: HashMap<(i64, i64), NodeIndex>,
     spatial_index: Option<RTree<RTreePoint>>,
-    /// Edge-based spatial index for production-grade snapping.
     edge_spatial_index: Option<RTree<RTreeSegment>>,
 }
 
@@ -229,25 +209,7 @@ impl RoadNetwork {
         );
     }
 
-    /// Build the spatial index for fast nearest-neighbor queries.
-    /// This is called automatically during graph construction.
     pub(super) fn build_spatial_index(&mut self) {
-        // Build node-based index (legacy, for backwards compatibility)
-        let points: Vec<RTreePoint> = self
-            .graph
-            .node_indices()
-            .filter_map(|idx| {
-                self.graph.node_weight(idx).map(|n| RTreePoint {
-                    lat: n.lat,
-                    lng: n.lng,
-                    node_index: idx,
-                })
-            })
-            .collect();
-
-        self.spatial_index = Some(RTree::bulk_load(points));
-
-        // Build edge-based index (production-grade snapping)
         let segments: Vec<RTreeSegment> = self
             .graph
             .edge_indices()
@@ -388,7 +350,6 @@ impl RoadNetwork {
         from: &EdgeSnappedLocation,
         to: &EdgeSnappedLocation,
     ) -> Result<RouteResult, RoutingError> {
-        // Get edge data for cost calculation
         let from_edge = self
             .graph
             .edge_weight(from.edge_index)
@@ -406,7 +367,6 @@ impl RoadNetwork {
 
         // If both snapped to the same edge, check if direct travel is possible
         if from.edge_index == to.edge_index {
-            // On the same edge - direct distance along segment
             let segment_time = from_edge.travel_time_s;
             let segment_dist = from_edge.distance_m;
             let travel_fraction = (to.position - from.position).abs();
@@ -439,7 +399,6 @@ impl RoadNetwork {
                 (to.to_node, cost_from_dest_to),
             ] {
                 if start_node == end_node {
-                    // Direct connection
                     let total_cost = start_cost + end_cost;
                     if best_result.is_none() || total_cost < best_result.as_ref().unwrap().0 {
                         best_result = Some((total_cost, vec![start_node], end_node, end_cost));
@@ -466,7 +425,6 @@ impl RoadNetwork {
 
         match best_result {
             Some((total_cost, path, _, _)) => {
-                // Build geometry: from.snapped -> path nodes -> to.snapped
                 let mut geometry = vec![from.snapped];
                 for &idx in &path {
                     if let Some(node) = self.graph.node_weight(idx) {
@@ -475,11 +433,8 @@ impl RoadNetwork {
                 }
                 geometry.push(to.snapped);
 
-                // Calculate total distance
                 let mut distance = 0.0;
-                // Distance from snap to first node
                 distance += from_edge.distance_m * from.position.min(1.0 - from.position);
-                // Distance along path
                 for window in path.windows(2) {
                     if let Some(edge) = self.graph.find_edge(window[0], window[1]) {
                         if let Some(weight) = self.graph.edge_weight(edge) {
@@ -487,7 +442,7 @@ impl RoadNetwork {
                         }
                     }
                 }
-                // Distance from last node to snap
+
                 distance += to_edge.distance_m * to.position.min(1.0 - to.position);
 
                 Ok(RouteResult {
@@ -503,7 +458,6 @@ impl RoadNetwork {
         }
     }
 
-    /// Find a route between two already-snapped coordinates.
     pub fn route_snapped(
         &self,
         from: &SnappedCoord,
@@ -554,7 +508,6 @@ impl RoadNetwork {
         }
     }
 
-    /// Find a route optimized for a specific objective.
     pub fn route_with(
         &self,
         from: Coord,
@@ -625,12 +578,10 @@ impl RoadNetwork {
         self.graph.edge_count()
     }
 
-    /// Returns the number of strongly connected components in the graph.
     pub fn strongly_connected_components(&self) -> usize {
         petgraph::algo::kosaraju_scc(&self.graph).len()
     }
 
-    /// Returns the fraction of nodes in the largest strongly connected component.
     pub fn largest_component_fraction(&self) -> f64 {
         let sccs = petgraph::algo::kosaraju_scc(&self.graph);
         if sccs.is_empty() {
@@ -645,15 +596,11 @@ impl RoadNetwork {
         }
     }
 
-    /// Returns true if the graph is strongly connected (single SCC).
     pub fn is_strongly_connected(&self) -> bool {
         self.strongly_connected_components() == 1
     }
 
     /// Filter the network to keep only the largest strongly connected component.
-    ///
-    /// This ensures all nodes in the network can reach each other, eliminating
-    /// unreachable pairs caused by disconnected road segments.
     pub fn filter_to_largest_scc(&mut self) {
         let sccs = petgraph::algo::kosaraju_scc(&self.graph);
         if sccs.len() <= 1 {
@@ -669,7 +616,6 @@ impl RoadNetwork {
             .collect();
 
         // Retain only nodes in the largest SCC
-        // Note: retain_nodes checks indices BEFORE removal, so this works correctly
         self.graph.retain_nodes(|g, n| {
             // The callback receives the original graph and original node index
             // We check if this node was in our largest SCC set
@@ -677,12 +623,10 @@ impl RoadNetwork {
             largest_scc.contains(&n)
         });
 
-        // Rebuild the coord_to_node map and spatial index
         self.rebuild_coord_to_node();
         self.build_spatial_index();
     }
 
-    /// Rebuild the coord_to_node map from the current graph state.
     fn rebuild_coord_to_node(&mut self) {
         self.coord_to_node.clear();
         for idx in self.graph.node_indices() {
@@ -700,12 +644,9 @@ impl Default for RoadNetwork {
     }
 }
 
-/// Optimization objective for routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Objective {
-    /// Minimize travel time (default).
     Time,
-    /// Minimize distance.
     Distance,
 }
 
@@ -717,8 +658,6 @@ fn douglas_peucker(points: &[Coord], tolerance_m: f64) -> Vec<Coord> {
 
     let first = points[0];
     let last = points[points.len() - 1];
-
-    // Find the point with maximum distance from the line
     let mut max_dist = 0.0;
     let mut max_idx = 0;
 
@@ -731,32 +670,26 @@ fn douglas_peucker(points: &[Coord], tolerance_m: f64) -> Vec<Coord> {
     }
 
     if max_dist > tolerance_m {
-        // Recursively simplify
         let mut left = douglas_peucker(&points[..=max_idx], tolerance_m);
         let right = douglas_peucker(&points[max_idx..], tolerance_m);
 
-        // Remove duplicate point at junction
         left.pop();
         left.extend(right);
         left
     } else {
-        // All points are within tolerance; keep only endpoints
         vec![first, last]
     }
 }
 
-/// Calculate perpendicular distance from a point to a line defined by two points.
 fn perpendicular_distance(point: Coord, line_start: Coord, line_end: Coord) -> f64 {
     let dx = line_end.lng - line_start.lng;
     let dy = line_end.lat - line_start.lat;
 
-    // If start and end are the same point, return distance to that point
     let line_length_sq = dx * dx + dy * dy;
     if line_length_sq < f64::EPSILON {
         return haversine_distance(point, line_start);
     }
 
-    // Project point onto line
     let t =
         ((point.lng - line_start.lng) * dx + (point.lat - line_start.lat) * dy) / line_length_sq;
     let t = t.clamp(0.0, 1.0);

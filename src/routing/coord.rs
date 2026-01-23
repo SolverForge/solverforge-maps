@@ -1,36 +1,8 @@
 //! Coordinate type for geographic locations.
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum CoordError {
-    LatOutOfRange { value: f64 },
-    LngOutOfRange { value: f64 },
-    LatNaN,
-    LngNaN,
-    LatInfinite { value: f64 },
-    LngInfinite { value: f64 },
-}
-
-impl fmt::Display for CoordError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CoordError::LatOutOfRange { value } => {
-                write!(f, "latitude {} out of valid range [-90, 90]", value)
-            }
-            CoordError::LngOutOfRange { value } => {
-                write!(f, "longitude {} out of valid range [-180, 180]", value)
-            }
-            CoordError::LatNaN => write!(f, "latitude is NaN"),
-            CoordError::LngNaN => write!(f, "longitude is NaN"),
-            CoordError::LatInfinite { value } => write!(f, "latitude {} is infinite", value),
-            CoordError::LngInfinite { value } => write!(f, "longitude {} is infinite", value),
-        }
-    }
-}
-
-impl std::error::Error for CoordError {}
+use super::error::CoordError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Coord {
@@ -65,26 +37,26 @@ impl Coord {
     /// - `lng` is outside [-180, 180]
     #[inline]
     pub fn try_new(lat: f64, lng: f64) -> Result<Self, CoordError> {
-        // Check NaN
         if lat.is_nan() {
             return Err(CoordError::LatNaN);
         }
+
         if lng.is_nan() {
             return Err(CoordError::LngNaN);
         }
 
-        // Check infinite
         if lat.is_infinite() {
             return Err(CoordError::LatInfinite { value: lat });
         }
+
         if lng.is_infinite() {
             return Err(CoordError::LngInfinite { value: lng });
         }
 
-        // Check range
         if !(-90.0..=90.0).contains(&lat) {
             return Err(CoordError::LatOutOfRange { value: lat });
         }
+
         if !(-180.0..=180.0).contains(&lng) {
             return Err(CoordError::LngOutOfRange { value: lng });
         }

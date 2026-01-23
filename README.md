@@ -122,9 +122,6 @@ let expanded = bbox.expand_for_routing(&locations);   // Smart expansion (1.4x d
 // Queries
 let center: Coord = bbox.center();
 let contains: bool = bbox.contains(Coord::new(39.95, -75.15));
-
-// Cache key for persistence
-let key: String = bbox.cache_key();
 ```
 
 #### BBoxError
@@ -336,9 +333,6 @@ let locations = vec![
 // Async computation
 let geometries: HashMap<(usize, usize), Vec<Coord>> =
     network.compute_geometries(&locations, None).await;
-
-// Sync computation
-let geometries = network.compute_geometries_sync(&locations);
 
 // Access specific route geometry
 if let Some(route_geom) = geometries.get(&(0, 1)) {
