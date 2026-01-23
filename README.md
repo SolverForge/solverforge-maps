@@ -291,14 +291,8 @@ let locations = vec![
     Coord::new(39.94, -75.15),
 ];
 
-// Async computation
+// Compute matrix (async, parallel via rayon internally)
 let matrix: TravelTimeMatrix = network.compute_matrix(&locations, None).await;
-
-// Sync computation
-let matrix: TravelTimeMatrix = network.compute_matrix_sync(&locations);
-
-// Parallel computation (faster for large matrices)
-let matrix: TravelTimeMatrix = network.compute_matrix_parallel(&locations);
 
 // Access travel times
 let time: Option<i64> = matrix.get(0, 1);           // From location 0 to 1

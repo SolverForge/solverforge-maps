@@ -5,20 +5,13 @@ use std::fmt;
 
 use super::coord::Coord;
 
-/// Error type for bounding box validation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BBoxError {
-    /// Minimum latitude is greater than maximum latitude.
     MinLatGreaterThanMax { min: f64, max: f64 },
-    /// Minimum longitude is greater than maximum longitude.
     MinLngGreaterThanMax { min: f64, max: f64 },
-    /// Latitude out of valid range [-90, 90].
     LatOutOfRange { value: f64 },
-    /// Longitude out of valid range [-180, 180].
     LngOutOfRange { value: f64 },
-    /// Value is NaN.
     NaN { field: &'static str },
-    /// Value is infinite.
     Infinite { field: &'static str, value: f64 },
 }
 
@@ -196,13 +189,8 @@ impl BoundingBox {
         }
     }
 
-    /// Expand by meters (converts to degrees at this latitude).
     pub fn expand_meters(self, meters: f64) -> Self {
-        // 1 degree of latitude is approximately 111,320 meters
         let lat_deg = meters / 111_320.0;
-
-        // 1 degree of longitude varies by latitude
-        // Use the center latitude for calculation
         let center_lat = (self.min_lat + self.max_lat) / 2.0;
         let lng_deg = meters / (111_320.0 * center_lat.to_radians().cos());
 
@@ -214,8 +202,6 @@ impl BoundingBox {
         }
     }
 
-    /// Expand to ensure all pairwise routes between locations fit.
-    /// Uses road network detour factor of 1.4 (empirical).
     pub fn expand_for_routing(self, locations: &[Coord]) -> Self {
         const DETOUR_FACTOR: f64 = 1.4;
 
@@ -223,7 +209,6 @@ impl BoundingBox {
             return self;
         }
 
-        // Find maximum pairwise distance
         let mut max_distance: f64 = 0.0;
         for i in 0..locations.len() {
             for j in (i + 1)..locations.len() {
@@ -232,7 +217,6 @@ impl BoundingBox {
             }
         }
 
-        // Expand by detour factor applied to max distance
         let expansion = max_distance * (DETOUR_FACTOR - 1.0) / 2.0;
         self.expand_meters(expansion)
     }

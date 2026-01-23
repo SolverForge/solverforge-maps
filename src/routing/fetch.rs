@@ -261,7 +261,8 @@ out body;"#,
                     let speed = config
                         .speed_profile
                         .speed_mps(highway.unwrap_or("residential"));
-                    let is_oneway = matches!(oneway, Some("yes") | Some("1"));
+                    let is_oneway_forward = matches!(oneway, Some("yes") | Some("1"));
+                    let is_oneway_reverse = matches!(oneway, Some("-1"));
 
                     for window in node_ids.windows(2) {
                         let n1_id = window[0];
@@ -287,10 +288,16 @@ out body;"#,
                             distance_m: distance,
                         };
 
-                        network.add_edge(idx1, idx2, edge_data.clone());
-
-                        if !is_oneway {
+                        if is_oneway_reverse {
+                            // oneway=-1 means traffic flows opposite to way direction
                             network.add_edge(idx2, idx1, edge_data);
+                        } else {
+                            // Forward direction (always added unless reverse-only)
+                            network.add_edge(idx1, idx2, edge_data.clone());
+                            if !is_oneway_forward {
+                                // Bidirectional road
+                                network.add_edge(idx2, idx1, edge_data);
+                            }
                         }
                     }
 
@@ -306,7 +313,21 @@ out body;"#,
             way_count
         );
 
-        // Build spatial index for fast snap_to_road queries
+        // Filter to largest strongly connected component to ensure all nodes are reachable
+        let scc_count = network.strongly_connected_components();
+        if scc_count > 1 {
+            info!(
+                "Road network has {} SCCs, filtering to largest component",
+                scc_count
+            );
+            network.filter_to_largest_scc();
+            info!(
+                "After SCC filter: {} nodes, {} edges",
+                network.node_count(),
+                network.edge_count()
+            );
+        }
+
         network.build_spatial_index();
 
         Ok(network)
@@ -343,7 +364,21 @@ out body;"#,
             network.add_edge_by_index(edge.from, edge.to, edge.travel_time_s, edge.distance_m);
         }
 
-        // Build spatial index for fast snap_to_road queries
+        // Filter to largest SCC (cached networks from older versions may not be filtered)
+        let scc_count = network.strongly_connected_components();
+        if scc_count > 1 {
+            info!(
+                "Cached network has {} SCCs, filtering to largest component",
+                scc_count
+            );
+            network.filter_to_largest_scc();
+            info!(
+                "After SCC filter: {} nodes, {} edges",
+                network.node_count(),
+                network.edge_count()
+            );
+        }
+
         network.build_spatial_index();
 
         Ok(network)

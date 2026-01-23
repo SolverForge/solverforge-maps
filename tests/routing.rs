@@ -246,28 +246,28 @@ mod network {
 mod matrix {
     use super::*;
 
-    #[test]
-    fn empty() {
+    #[tokio::test]
+    async fn empty() {
         let network = RoadNetwork::new();
         let locations: Vec<Coord> = vec![];
-        let matrix = network.compute_matrix_sync(&locations);
+        let matrix = network.compute_matrix(&locations, None).await;
         assert_eq!(matrix.size(), 0);
     }
 
-    #[test]
-    fn single_location() {
+    #[tokio::test]
+    async fn single_location() {
         let network = RoadNetwork::new();
         let locations = vec![Coord::new(39.95, -75.16)];
-        let matrix = network.compute_matrix_sync(&locations);
+        let matrix = network.compute_matrix(&locations, None).await;
         assert_eq!(matrix.size(), 1);
         assert_eq!(matrix.get(0, 0), Some(0));
     }
 
-    #[test]
-    fn two_locations() {
+    #[tokio::test]
+    async fn two_locations() {
         let network = RoadNetwork::new();
         let locations = vec![Coord::new(39.95, -75.16), Coord::new(39.96, -75.17)];
-        let matrix = network.compute_matrix_sync(&locations);
+        let matrix = network.compute_matrix(&locations, None).await;
         assert_eq!(matrix.size(), 2);
         assert_eq!(matrix.get(0, 0), Some(0));
         assert_eq!(matrix.get(1, 1), Some(0));
@@ -276,11 +276,11 @@ mod matrix {
         assert_eq!(matrix.get(1, 0), Some(UNREACHABLE));
     }
 
-    #[test]
-    fn matrix_methods() {
+    #[tokio::test]
+    async fn matrix_methods() {
         let network = RoadNetwork::new();
         let locations = vec![Coord::new(39.95, -75.16)];
-        let matrix = network.compute_matrix_sync(&locations);
+        let matrix = network.compute_matrix(&locations, None).await;
 
         assert_eq!(matrix.size(), 1);
         assert!(matrix.row(0).is_some());
