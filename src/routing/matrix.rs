@@ -1,141 +1,337 @@
 //! Matrix computation for road networks.
 
-use ordered_float::OrderedFloat;
-use petgraph::algo::dijkstra;
+use rayon::prelude::*;
 use std::collections::HashMap;
+use tokio::sync::mpsc::Sender;
 
-use super::geo::{haversine_distance, DEFAULT_SPEED_MPS};
-use super::network::RoadNetwork;
+use super::algo::dijkstra;
+use super::coord::Coord;
+use super::graph::NodeIdx;
+use super::network::{EdgeSnappedLocation, RoadNetwork, SnappedCoord};
+use super::progress::RoutingProgress;
 
-impl RoadNetwork {
-    /// Computes route geometries for all location pairs.
-    pub fn compute_all_geometries(
-        &self,
-        locations: &[(f64, f64)],
-    ) -> HashMap<(usize, usize), Vec<(f64, f64)>> {
-        self.compute_all_geometries_with_progress(locations, |_, _| {})
+pub const UNREACHABLE: i64 = i64::MAX;
+
+#[derive(Debug, Clone, Default)]
+pub struct TravelTimeMatrix {
+    data: Vec<i64>,
+    size: usize,
+    locations: Vec<SnappedCoord>,
+}
+
+impl TravelTimeMatrix {
+    pub(crate) fn new(data: Vec<i64>, size: usize, locations: Vec<SnappedCoord>) -> Self {
+        debug_assert_eq!(data.len(), size * size);
+        debug_assert_eq!(locations.len(), size);
+        Self {
+            data,
+            size,
+            locations,
+        }
     }
 
-    /// Computes route geometries with row-level progress callback.
+    /// Get the travel time from one location to another.
     ///
-    /// # Example
-    ///
-    /// ```
-    /// # use solverforge_maps::RoadNetwork;
-    /// let network = RoadNetwork::new();
-    /// let locations = vec![(39.95, -75.16), (39.96, -75.17)];
-    /// let mut progress_calls = 0;
-    /// let geometries = network.compute_all_geometries_with_progress(&locations, |row, total| {
-    ///     progress_calls += 1;
-    ///     assert!(row < total);
-    /// });
-    /// assert_eq!(progress_calls, 2); // One call per source location
-    /// ```
-    pub fn compute_all_geometries_with_progress<F>(
+    /// Returns `None` if indices are out of bounds.
+    /// Returns `Some(UNREACHABLE)` if the pair is not reachable.
+    #[inline]
+    pub fn get(&self, from: usize, to: usize) -> Option<i64> {
+        if from < self.size && to < self.size {
+            Some(self.data[from * self.size + to])
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn is_reachable(&self, from: usize, to: usize) -> bool {
+        self.get(from, to)
+            .map(|v| v != UNREACHABLE)
+            .unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    #[inline]
+    pub fn locations(&self) -> &[SnappedCoord] {
+        &self.locations
+    }
+
+    #[inline]
+    pub fn row(&self, i: usize) -> Option<&[i64]> {
+        if i < self.size {
+            let start = i * self.size;
+            Some(&self.data[start..start + self.size])
+        } else {
+            None
+        }
+    }
+
+    pub fn min(&self) -> Option<i64> {
+        let mut min_val = None;
+        for i in 0..self.size {
+            for j in 0..self.size {
+                if i == j {
+                    continue;
+                }
+                let val = self.data[i * self.size + j];
+                if val != UNREACHABLE {
+                    min_val = Some(min_val.map(|m: i64| m.min(val)).unwrap_or(val));
+                }
+            }
+        }
+        min_val
+    }
+
+    pub fn max(&self) -> Option<i64> {
+        let mut max_val = None;
+        for i in 0..self.size {
+            for j in 0..self.size {
+                if i == j {
+                    continue;
+                }
+                let val = self.data[i * self.size + j];
+                if val != UNREACHABLE {
+                    max_val = Some(max_val.map(|m: i64| m.max(val)).unwrap_or(val));
+                }
+            }
+        }
+        max_val
+    }
+
+    pub fn mean(&self) -> Option<f64> {
+        let mut sum = 0i64;
+        let mut count = 0usize;
+        for i in 0..self.size {
+            for j in 0..self.size {
+                if i == j {
+                    continue;
+                }
+                let val = self.data[i * self.size + j];
+                if val != UNREACHABLE {
+                    sum = sum.saturating_add(val);
+                    count += 1;
+                }
+            }
+        }
+        if count > 0 {
+            Some(sum as f64 / count as f64)
+        } else {
+            None
+        }
+    }
+
+    pub fn reachability_ratio(&self) -> f64 {
+        if self.size <= 1 {
+            return 1.0;
+        }
+        let total_pairs = self.size * (self.size - 1);
+        let reachable = self.count_reachable();
+        reachable as f64 / total_pairs as f64
+    }
+
+    fn count_reachable(&self) -> usize {
+        let mut count = 0;
+        for i in 0..self.size {
+            for j in 0..self.size {
+                if i != j && self.data[i * self.size + j] != UNREACHABLE {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    pub fn unreachable_pairs(&self) -> Vec<(usize, usize)> {
+        let mut pairs = Vec::new();
+        for i in 0..self.size {
+            for j in 0..self.size {
+                if i != j && self.data[i * self.size + j] == UNREACHABLE {
+                    pairs.push((i, j));
+                }
+            }
+        }
+        pairs
+    }
+
+    pub fn as_slice(&self) -> &[i64] {
+        &self.data
+    }
+}
+
+impl RoadNetwork {
+    pub async fn compute_matrix(
         &self,
-        locations: &[(f64, f64)],
-        mut on_row_complete: F,
-    ) -> HashMap<(usize, usize), Vec<(f64, f64)>>
-    where
-        F: FnMut(usize, usize),
-    {
+        locations: &[Coord],
+        progress: Option<&Sender<RoutingProgress>>,
+    ) -> TravelTimeMatrix {
         let n = locations.len();
+        if n == 0 {
+            return TravelTimeMatrix::new(vec![], 0, vec![]);
+        }
+
+        let edge_snapped: Vec<Option<EdgeSnappedLocation>> = locations
+            .iter()
+            .map(|&coord| self.snap_to_edge(coord).ok())
+            .collect();
+
+        let snapped: Vec<SnappedCoord> = locations
+            .iter()
+            .zip(edge_snapped.iter())
+            .map(|(&coord, edge_snap)| {
+                if let Some(es) = edge_snap {
+                    SnappedCoord {
+                        original: coord,
+                        snapped: es.snapped,
+                        snap_distance_m: es.snap_distance_m,
+                        node_index: es.from_node,
+                    }
+                } else {
+                    SnappedCoord {
+                        original: coord,
+                        snapped: coord,
+                        snap_distance_m: f64::INFINITY,
+                        node_index: NodeIdx::new(0),
+                    }
+                }
+            })
+            .collect();
+
+        // Compute rows in parallel via rayon - each row runs Dijkstra from source endpoints
+        let graph = &self.graph;
+        let rows: Vec<Vec<i64>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut row = vec![0i64; n];
+
+                let Some(from) = &edge_snapped[i] else {
+                    for (j, cell) in row.iter_mut().enumerate() {
+                        if i != j {
+                            *cell = UNREACHABLE;
+                        }
+                    }
+                    return row;
+                };
+
+                let from_edge = match graph.edge_weight(from.edge_index) {
+                    Some(e) => e,
+                    None => {
+                        for (j, cell) in row.iter_mut().enumerate() {
+                            if i != j {
+                                *cell = UNREACHABLE;
+                            }
+                        }
+                        return row;
+                    }
+                };
+
+                // Run Dijkstra from both endpoints of source edge to all nodes
+                let costs_a = dijkstra(graph, from.from_node, None, |e| e.travel_time_s);
+                let costs_b = dijkstra(graph, from.to_node, None, |e| e.travel_time_s);
+
+                // Offset from snap point to each endpoint
+                let off_a = from_edge.travel_time_s * from.position;
+                let off_b = from_edge.travel_time_s * (1.0 - from.position);
+
+                for j in 0..n {
+                    if i == j {
+                        continue;
+                    }
+
+                    let Some(to) = &edge_snapped[j] else {
+                        row[j] = UNREACHABLE;
+                        continue;
+                    };
+
+                    let to_edge = match graph.edge_weight(to.edge_index) {
+                        Some(e) => e,
+                        None => {
+                            row[j] = UNREACHABLE;
+                            continue;
+                        }
+                    };
+
+                    let to_off_a = to_edge.travel_time_s * to.position;
+                    let to_off_b = to_edge.travel_time_s * (1.0 - to.position);
+
+                    // Best of 4 combinations: (from endpoint) -> (to endpoint)
+                    let mut best = f64::MAX;
+                    if let Some(&c) = costs_a.get(&to.from_node) {
+                        best = best.min(off_a + c + to_off_a);
+                    }
+                    if let Some(&c) = costs_a.get(&to.to_node) {
+                        best = best.min(off_a + c + to_off_b);
+                    }
+                    if let Some(&c) = costs_b.get(&to.from_node) {
+                        best = best.min(off_b + c + to_off_a);
+                    }
+                    if let Some(&c) = costs_b.get(&to.to_node) {
+                        best = best.min(off_b + c + to_off_b);
+                    }
+
+                    row[j] = if best == f64::MAX {
+                        UNREACHABLE
+                    } else {
+                        best.round() as i64
+                    };
+                }
+
+                row
+            })
+            .collect();
+
+        if let Some(tx) = progress {
+            let _ = tx
+                .send(RoutingProgress::ComputingMatrix {
+                    percent: 80,
+                    row: n,
+                    total: n,
+                })
+                .await;
+        }
+
+        let data: Vec<i64> = rows.into_iter().flatten().collect();
+        TravelTimeMatrix::new(data, n, snapped)
+    }
+
+    pub async fn compute_geometries(
+        &self,
+        locations: &[Coord],
+        progress: Option<&Sender<RoutingProgress>>,
+    ) -> HashMap<(usize, usize), Vec<Coord>> {
+        let n = locations.len();
+        let total_pairs = n * (n - 1);
         let mut geometries = HashMap::new();
+        let mut pair_count = 0usize;
 
         for i in 0..n {
             for j in 0..n {
                 if i == j {
                     continue;
                 }
-                if let Some(result) = self.route(locations[i], locations[j]) {
+                if let Ok(result) = self.route(locations[i], locations[j]) {
                     geometries.insert((i, j), result.geometry);
                 }
+                pair_count += 1;
+
+                if let Some(tx) = progress {
+                    if pair_count.is_multiple_of(10) || pair_count == total_pairs {
+                        let percent = 80 + (pair_count * 15 / total_pairs.max(1)) as u8;
+                        let _ = tx
+                            .send(RoutingProgress::ComputingGeometries {
+                                percent,
+                                pair: pair_count,
+                                total: total_pairs,
+                            })
+                            .await;
+                    }
+                }
             }
-            on_row_complete(i, n);
         }
 
         geometries
-    }
-
-    /// Computes all-pairs travel time matrix for given locations.
-    pub fn compute_matrix(&self, locations: &[(f64, f64)]) -> Vec<Vec<i64>> {
-        self.compute_matrix_with_progress(locations, |_, _| {})
-    }
-
-    /// Computes all-pairs travel time matrix with row-level progress callback.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use solverforge_maps::RoadNetwork;
-    /// let network = RoadNetwork::new();
-    /// let locations = vec![(39.95, -75.16), (39.96, -75.17)];
-    /// let mut progress_calls = 0;
-    /// let matrix = network.compute_matrix_with_progress(&locations, |row, total| {
-    ///     progress_calls += 1;
-    ///     assert!(row < total);
-    /// });
-    /// assert_eq!(progress_calls, 2); // One call per row
-    /// assert_eq!(matrix.len(), 2);
-    /// ```
-    pub fn compute_matrix_with_progress<F>(
-        &self,
-        locations: &[(f64, f64)],
-        mut on_row_complete: F,
-    ) -> Vec<Vec<i64>>
-    where
-        F: FnMut(usize, usize),
-    {
-        let n = locations.len();
-        let mut matrix = vec![vec![0i64; n]; n];
-
-        let nodes: Vec<_> = locations
-            .iter()
-            .map(|&(lat, lng)| self.snap_to_road(lat, lng))
-            .collect();
-
-        for i in 0..n {
-            if let Some(from_node) = nodes[i] {
-                let costs = dijkstra(self.graph(), from_node, None, |e| {
-                    OrderedFloat(e.weight().travel_time_s)
-                });
-
-                for j in 0..n {
-                    if i == j {
-                        continue;
-                    }
-                    if let Some(to_node) = nodes[j] {
-                        if let Some(cost) = costs.get(&to_node) {
-                            matrix[i][j] = cost.0.round() as i64;
-                        } else {
-                            let dist = haversine_distance(
-                                locations[i].0,
-                                locations[i].1,
-                                locations[j].0,
-                                locations[j].1,
-                            );
-                            matrix[i][j] = (dist / DEFAULT_SPEED_MPS).round() as i64;
-                        }
-                    }
-                }
-            } else {
-                for j in 0..n {
-                    if i == j {
-                        continue;
-                    }
-                    let dist = haversine_distance(
-                        locations[i].0,
-                        locations[i].1,
-                        locations[j].0,
-                        locations[j].1,
-                    );
-                    matrix[i][j] = (dist / DEFAULT_SPEED_MPS).round() as i64;
-                }
-            }
-
-            on_row_complete(i, n);
-        }
-
-        matrix
     }
 }
