@@ -30,13 +30,13 @@ RUST_VERSION := 1.80+
 
 # ============== Banner ==============
 banner:
-	@printf "$(CYAN)$(BOLD)  ____        _                _____                        __  __\n"
+	@printf "$(GREEN)$(BOLD)  ____        _                _____                        __  __\n"
 	@printf " / ___|  ___ | |_   _____ _ __|  ___|__  _ __ __ _  ___   |  \\/  | __ _ _ __  ___\n"
 	@printf " \\___ \\\\ / _ \\\\| \\\\ \\\\ / / _ \\\\ '__| |_ / _ \\\\| '__/ _\` |/ _ \\\\  | |\\/| |/ _\` | '_ \\\\/ __|\n"
 	@printf "  ___) | (_) | |\\\\ V /  __/ |  |  _| (_) | | | (_| |  __/  | |  | | (_| | |_) \\\\__ \\\\\n"
 	@printf " |____/ \\\\___/|_| \\_/ \\___|_|  |_|  \\___/|_|  \\__, |\\___|  |_|  |_|\\__,_| .__/|___/\n"
 	@printf "                                             |___/                     |_|$(RESET)\n"
-	@printf "  $(GRAY)v$(VERSION)$(RESET) $(CYAN)SolverForge Maps Build System$(RESET)\n\n"
+	@printf "  $(GRAY)v$(VERSION)$(RESET) $(GREEN)SolverForge Maps Build System$(RESET)\n\n"
 
 # ============== Build Targets ==============
 

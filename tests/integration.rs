@@ -275,6 +275,239 @@ mod routing {
             assert_eq!(simplified.geometry[simplified.geometry.len() - 1], last);
         }
     }
+
+    mod verification {
+        use super::*;
+
+        /// Philadelphia bounding box (cached data exists)
+        fn philadelphia_bbox() -> BoundingBox {
+            BoundingBox::new(39.946, -75.174, 39.962, -75.150)
+        }
+
+        /// City Hall area
+        fn city_hall() -> Coord {
+            Coord::new(39.9526, -75.1635)
+        }
+
+        /// Waterfront area
+        fn waterfront() -> Coord {
+            Coord::new(39.9496, -75.1503)
+        }
+
+        /// Market Street West (for straight segment test)
+        fn market_st_west() -> Coord {
+            Coord::new(39.9526, -75.1700)
+        }
+
+        /// Verify every point in the route geometry is within a small tolerance of a network node.
+        #[tokio::test]
+        async fn geometry_points_lie_on_network() {
+            let bbox = philadelphia_bbox();
+            let config = NetworkConfig::default();
+
+            let network = RoadNetwork::load_or_fetch(&bbox, &config, None)
+                .await
+                .expect("Failed to load Philadelphia network");
+
+            let route = network
+                .route(city_hall(), waterfront())
+                .expect("Failed to compute route");
+
+            // Every geometry point should snap to within 50m of a network node
+            let snap_threshold_m = 50.0;
+            for (i, point) in route.geometry.iter().enumerate() {
+                let snap_result = network.snap_to_road_detailed(*point);
+                assert!(
+                    snap_result.is_ok(),
+                    "Geometry point {} ({}, {}) failed to snap",
+                    i,
+                    point.lat,
+                    point.lng
+                );
+                let snap = snap_result.unwrap();
+                assert!(
+                    snap.snap_distance_m < snap_threshold_m,
+                    "Geometry point {} is {}m from network (threshold: {}m)",
+                    i,
+                    snap.snap_distance_m,
+                    snap_threshold_m
+                );
+            }
+        }
+
+        /// Use a known straight road segment where distance is predictable.
+        /// Market Street in Philadelphia is mostly straight east-west.
+        #[tokio::test]
+        async fn known_straight_segment() {
+            let bbox = philadelphia_bbox();
+            let config = NetworkConfig::default();
+
+            let network = RoadNetwork::load_or_fetch(&bbox, &config, None)
+                .await
+                .expect("Failed to load Philadelphia network");
+
+            // Two points on Market Street, ~500m apart
+            let start = market_st_west();
+            let end = city_hall();
+
+            let route = network.route(start, end).expect("Failed to compute route");
+
+            let straight_line_distance = haversine_distance(start, end);
+
+            // Route distance should be within reasonable bounds of straight-line distance
+            // Urban areas with one-way streets may require up to 2x detours
+            let ratio = route.distance_meters / straight_line_distance;
+            assert!(
+                ratio >= 0.9 && ratio <= 2.5,
+                "Route distance ({:.0}m) should be close to straight-line ({:.0}m), ratio: {:.2}",
+                route.distance_meters,
+                straight_line_distance,
+                ratio
+            );
+
+            // Sanity: straight-line is ~550m, route should be in reasonable range
+            assert!(
+                straight_line_distance > 400.0 && straight_line_distance < 700.0,
+                "Unexpected straight-line distance: {:.0}m",
+                straight_line_distance
+            );
+        }
+
+        /// Verify that routing from A to B actually reaches B.
+        #[tokio::test]
+        async fn roundtrip_snap_route_reaches_destination() {
+            let bbox = philadelphia_bbox();
+            let config = NetworkConfig::default();
+
+            let network = RoadNetwork::load_or_fetch(&bbox, &config, None)
+                .await
+                .expect("Failed to load Philadelphia network");
+
+            let start_raw = city_hall();
+            let end_raw = waterfront();
+
+            // Snap both points
+            let start_snap = network
+                .snap_to_road_detailed(start_raw)
+                .expect("Failed to snap start");
+            let end_snap = network
+                .snap_to_road_detailed(end_raw)
+                .expect("Failed to snap end");
+
+            // Compute route
+            let route = network
+                .route(start_raw, end_raw)
+                .expect("Failed to compute route");
+
+            assert!(
+                route.geometry.len() >= 2,
+                "Route geometry should have at least 2 points"
+            );
+
+            let route_start = route.geometry.first().unwrap();
+            let route_end = route.geometry.last().unwrap();
+
+            // Route endpoints should be within 50m of snapped points
+            let endpoint_threshold_m = 50.0;
+
+            let start_distance = haversine_distance(*route_start, start_snap.snapped);
+            assert!(
+                start_distance < endpoint_threshold_m,
+                "Route start ({}, {}) is {}m from snapped start ({}, {}), threshold: {}m",
+                route_start.lat,
+                route_start.lng,
+                start_distance,
+                start_snap.snapped.lat,
+                start_snap.snapped.lng,
+                endpoint_threshold_m
+            );
+
+            let end_distance = haversine_distance(*route_end, end_snap.snapped);
+            assert!(
+                end_distance < endpoint_threshold_m,
+                "Route end ({}, {}) is {}m from snapped end ({}, {}), threshold: {}m",
+                route_end.lat,
+                route_end.lng,
+                end_distance,
+                end_snap.snapped.lat,
+                end_snap.snapped.lng,
+                endpoint_threshold_m
+            );
+        }
+
+        /// Multiple sanity assertions: distance bounds, speed range, geometry continuity.
+        #[tokio::test]
+        async fn route_sanity_checks() {
+            let bbox = philadelphia_bbox();
+            let config = NetworkConfig::default();
+
+            let network = RoadNetwork::load_or_fetch(&bbox, &config, None)
+                .await
+                .expect("Failed to load Philadelphia network");
+
+            // Test multiple routes
+            let waypoint_pairs = [
+                (city_hall(), waterfront()),
+                (market_st_west(), waterfront()),
+                (market_st_west(), city_hall()),
+            ];
+
+            for (start, end) in waypoint_pairs {
+                let route = network.route(start, end).expect("Failed to compute route");
+
+                let straight_line = haversine_distance(start, end);
+
+                // 4a: Route distance >= straight-line distance (with small tolerance)
+                assert!(
+                    route.distance_meters >= straight_line * 0.99,
+                    "Route distance ({:.0}m) should be >= straight-line ({:.0}m)",
+                    route.distance_meters,
+                    straight_line
+                );
+
+                // 4b: Duration proportional to distance (reasonable speed range)
+                let speed_mps = route.distance_meters / route.duration_seconds as f64;
+                assert!(
+                    speed_mps > 1.0,
+                    "Speed ({:.1} m/s = {:.1} km/h) too slow",
+                    speed_mps,
+                    speed_mps * 3.6
+                );
+                assert!(
+                    speed_mps < 35.0,
+                    "Speed ({:.1} m/s = {:.1} km/h) too fast",
+                    speed_mps,
+                    speed_mps * 3.6
+                );
+
+                // 4c: Geometry is continuous (no teleportation)
+                for (i, window) in route.geometry.windows(2).enumerate() {
+                    let gap = haversine_distance(window[0], window[1]);
+                    assert!(
+                        gap < 500.0,
+                        "Geometry gap at index {} too large: {:.0}m",
+                        i,
+                        gap
+                    );
+                }
+
+                // 4d: Geometry distance ≈ reported distance
+                let geom_distance: f64 = route
+                    .geometry
+                    .windows(2)
+                    .map(|w| haversine_distance(w[0], w[1]))
+                    .sum();
+                let ratio = geom_distance / route.distance_meters;
+                assert!(
+                    ratio > 0.9 && ratio < 1.1,
+                    "Geometry distance ({:.0}m) should match reported ({:.0}m), ratio: {:.2}",
+                    geom_distance,
+                    route.distance_meters,
+                    ratio
+                );
+            }
+        }
+    }
 }
 
 mod matrix {
