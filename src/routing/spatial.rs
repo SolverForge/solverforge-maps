@@ -76,7 +76,6 @@ impl<T> KdTree<T> {
         let node = &self.nodes[node_idx];
         let dist = query.distance_squared(&node.point);
 
-        // Update best if this point is closer
         match best {
             Some((_, best_dist)) if dist < *best_dist => {
                 *best = Some((node_idx, dist));
@@ -168,7 +167,6 @@ impl<T> KdTree<T> {
 
         let axis = depth % 2;
 
-        // Sort by the appropriate axis
         indexed.sort_by(|a, b| {
             let va = if axis == 0 { a.1.x } else { a.1.y };
             let vb = if axis == 0 { b.1.x } else { b.1.y };
@@ -183,11 +181,9 @@ impl<T> KdTree<T> {
         let orig_idx = mid_item.0;
         let (point, data) = items[orig_idx].take().expect("item already taken");
 
-        // Recursively build left and right subtrees
         let left = self.build_from_indexed(left_slice, items, depth + 1);
         let right = self.build_from_indexed(right_slice, items, depth + 1);
 
-        // Add the node
         let node_idx = self.nodes.len();
         self.nodes.push(KdNode {
             point,

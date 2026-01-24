@@ -146,7 +146,6 @@ impl<N, E> DiGraph<N, E> {
     where
         F: FnMut(NodeIdx, &N) -> bool,
     {
-        // Determine which nodes to keep
         let keep: Vec<bool> = self
             .nodes
             .iter()
@@ -164,7 +163,6 @@ impl<N, E> DiGraph<N, E> {
             }
         }
 
-        // Rebuild nodes
         let new_nodes: Vec<N> = self
             .nodes
             .drain(..)
@@ -189,7 +187,6 @@ impl<N, E> DiGraph<N, E> {
             }
         }
 
-        // Rebuild adjacency lists
         let node_count = new_nodes.len();
         let mut new_outgoing: Vec<Vec<EdgeIdx>> = vec![Vec::new(); node_count];
         let mut new_incoming: Vec<Vec<EdgeIdx>> = vec![Vec::new(); node_count];

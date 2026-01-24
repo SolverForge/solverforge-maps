@@ -69,7 +69,6 @@ where
     });
 
     while let Some(State { cost, node, .. }) = heap.pop() {
-        // Found goal
         if is_goal(node) {
             let mut path = vec![node];
             let mut current = node;
@@ -81,14 +80,12 @@ where
             return Some((cost, path));
         }
 
-        // Skip if we already found a better path
         if let Some(&d) = dist.get(&node) {
             if cost > d {
                 continue;
             }
         }
 
-        // Explore neighbors
         for &edge_idx in graph.outgoing_edges(node) {
             if let (Some(edge_data), Some((_, to))) =
                 (graph.edge_weight(edge_idx), graph.edge_endpoints(edge_idx))
@@ -138,21 +135,18 @@ where
     });
 
     while let Some(State { cost, node, .. }) = heap.pop() {
-        // Early exit if we reached the goal
         if let Some(g) = goal {
             if node == g {
                 break;
             }
         }
 
-        // Skip if we already found a better path
         if let Some(&d) = dist.get(&node) {
             if cost > d {
                 continue;
             }
         }
 
-        // Explore neighbors
         for &edge_idx in graph.outgoing_edges(node) {
             if let (Some(edge_data), Some((_, to))) =
                 (graph.edge_weight(edge_idx), graph.edge_endpoints(edge_idx))
@@ -228,8 +222,6 @@ fn dfs_forward<N, E>(
         }
 
         let edges = graph.outgoing_edges(current);
-
-        // Find next unvisited neighbor
         let mut found_next = false;
         while *edge_idx < edges.len() {
             let e = edges[*edge_idx];
@@ -269,8 +261,6 @@ fn dfs_backward<N, E>(
         }
 
         let edges = graph.incoming_edges(current);
-
-        // Find next unvisited neighbor (in reverse direction)
         let mut found_next = false;
         while *edge_idx < edges.len() {
             let e = edges[*edge_idx];
