@@ -258,9 +258,10 @@ out body;"#,
                 if let Some(ref node_ids) = elem.nodes {
                     let highway = elem.tags.as_ref().and_then(|t| t.highway.as_deref());
                     let oneway = elem.tags.as_ref().and_then(|t| t.oneway.as_deref());
+                    let maxspeed = elem.tags.as_ref().and_then(|t| t.maxspeed.as_deref());
                     let speed = config
                         .speed_profile
-                        .speed_mps(highway.unwrap_or("residential"));
+                        .speed_mps(maxspeed, highway.unwrap_or("residential"));
                     let is_oneway_forward = matches!(oneway, Some("yes") | Some("1"));
                     let is_oneway_reverse = matches!(oneway, Some("-1"));
 

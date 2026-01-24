@@ -1,19 +1,17 @@
 //! Matrix computation for road networks.
 
-use ordered_float::OrderedFloat;
-use petgraph::algo::dijkstra;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 
+use super::algo::dijkstra;
 use super::coord::Coord;
+use super::graph::NodeIdx;
 use super::network::{EdgeSnappedLocation, RoadNetwork, SnappedCoord};
 use super::progress::RoutingProgress;
 
-/// Value used to indicate unreachable pairs in the matrix.
 pub const UNREACHABLE: i64 = i64::MAX;
 
-/// A travel time matrix with metadata and analysis methods.
 #[derive(Debug, Clone, Default)]
 pub struct TravelTimeMatrix {
     data: Vec<i64>,
@@ -45,7 +43,6 @@ impl TravelTimeMatrix {
         }
     }
 
-    /// Check if a pair is reachable.
     #[inline]
     pub fn is_reachable(&self, from: usize, to: usize) -> bool {
         self.get(from, to)
@@ -53,19 +50,16 @@ impl TravelTimeMatrix {
             .unwrap_or(false)
     }
 
-    /// Get the matrix size (number of locations).
     #[inline]
     pub fn size(&self) -> usize {
         self.size
     }
 
-    /// Get the snapped locations.
     #[inline]
     pub fn locations(&self) -> &[SnappedCoord] {
         &self.locations
     }
 
-    /// Get a row of the matrix as a slice.
     #[inline]
     pub fn row(&self, i: usize) -> Option<&[i64]> {
         if i < self.size {
@@ -76,7 +70,6 @@ impl TravelTimeMatrix {
         }
     }
 
-    /// Get the minimum travel time (excluding diagonal and unreachable).
     pub fn min(&self) -> Option<i64> {
         let mut min_val = None;
         for i in 0..self.size {
@@ -93,7 +86,6 @@ impl TravelTimeMatrix {
         min_val
     }
 
-    /// Get the maximum travel time (excluding diagonal and unreachable).
     pub fn max(&self) -> Option<i64> {
         let mut max_val = None;
         for i in 0..self.size {
@@ -110,7 +102,6 @@ impl TravelTimeMatrix {
         max_val
     }
 
-    /// Get the mean travel time (excluding diagonal and unreachable).
     pub fn mean(&self) -> Option<f64> {
         let mut sum = 0i64;
         let mut count = 0usize;
@@ -133,7 +124,6 @@ impl TravelTimeMatrix {
         }
     }
 
-    /// Get the fraction of reachable pairs (excluding diagonal).
     pub fn reachability_ratio(&self) -> f64 {
         if self.size <= 1 {
             return 1.0;
@@ -143,7 +133,6 @@ impl TravelTimeMatrix {
         reachable as f64 / total_pairs as f64
     }
 
-    /// Count reachable pairs (excluding diagonal).
     fn count_reachable(&self) -> usize {
         let mut count = 0;
         for i in 0..self.size {
@@ -156,7 +145,6 @@ impl TravelTimeMatrix {
         count
     }
 
-    /// Get all unreachable pairs as (from_idx, to_idx).
     pub fn unreachable_pairs(&self) -> Vec<(usize, usize)> {
         let mut pairs = Vec::new();
         for i in 0..self.size {
@@ -169,17 +157,12 @@ impl TravelTimeMatrix {
         pairs
     }
 
-    /// Get raw data as a flat slice (row-major order).
     pub fn as_slice(&self) -> &[i64] {
         &self.data
     }
 }
 
 impl RoadNetwork {
-    /// Compute the travel time matrix using per-source Dijkstra with rayon parallelism.
-    ///
-    /// This is production-grade: O(n × Dijkstra) instead of O(n² × A*).
-    /// Each source runs Dijkstra once to get costs to ALL nodes, then O(1) lookup per destination.
     pub async fn compute_matrix(
         &self,
         locations: &[Coord],
@@ -190,13 +173,11 @@ impl RoadNetwork {
             return TravelTimeMatrix::new(vec![], 0, vec![]);
         }
 
-        // Snap all locations to edges (production-grade)
         let edge_snapped: Vec<Option<EdgeSnappedLocation>> = locations
             .iter()
             .map(|&coord| self.snap_to_edge(coord).ok())
             .collect();
 
-        // Build SnappedCoord for API compatibility
         let snapped: Vec<SnappedCoord> = locations
             .iter()
             .zip(edge_snapped.iter())
@@ -213,7 +194,7 @@ impl RoadNetwork {
                         original: coord,
                         snapped: coord,
                         snap_distance_m: f64::INFINITY,
-                        node_index: petgraph::graph::NodeIndex::new(0),
+                        node_index: NodeIdx::new(0),
                     }
                 }
             })
@@ -247,13 +228,9 @@ impl RoadNetwork {
                     }
                 };
 
-                // Run Dijkstra from BOTH endpoints of source edge (to ALL nodes)
-                let costs_a = dijkstra(graph, from.from_node, None, |e| {
-                    OrderedFloat(e.weight().travel_time_s)
-                });
-                let costs_b = dijkstra(graph, from.to_node, None, |e| {
-                    OrderedFloat(e.weight().travel_time_s)
-                });
+                // Run Dijkstra from both endpoints of source edge to all nodes
+                let costs_a = dijkstra(graph, from.from_node, None, |e| e.travel_time_s);
+                let costs_b = dijkstra(graph, from.to_node, None, |e| e.travel_time_s);
 
                 // Offset from snap point to each endpoint
                 let off_a = from_edge.travel_time_s * from.position;
@@ -283,16 +260,16 @@ impl RoadNetwork {
                     // Best of 4 combinations: (from endpoint) -> (to endpoint)
                     let mut best = f64::MAX;
                     if let Some(&c) = costs_a.get(&to.from_node) {
-                        best = best.min(off_a + c.0 + to_off_a);
+                        best = best.min(off_a + c + to_off_a);
                     }
                     if let Some(&c) = costs_a.get(&to.to_node) {
-                        best = best.min(off_a + c.0 + to_off_b);
+                        best = best.min(off_a + c + to_off_b);
                     }
                     if let Some(&c) = costs_b.get(&to.from_node) {
-                        best = best.min(off_b + c.0 + to_off_a);
+                        best = best.min(off_b + c + to_off_a);
                     }
                     if let Some(&c) = costs_b.get(&to.to_node) {
-                        best = best.min(off_b + c.0 + to_off_b);
+                        best = best.min(off_b + c + to_off_b);
                     }
 
                     row[j] = if best == f64::MAX {
@@ -306,7 +283,6 @@ impl RoadNetwork {
             })
             .collect();
 
-        // Progress update after matrix computation
         if let Some(tx) = progress {
             let _ = tx
                 .send(RoutingProgress::ComputingMatrix {

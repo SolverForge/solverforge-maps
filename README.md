@@ -19,7 +19,7 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 
 ```toml
 [dependencies]
-solverforge-maps = "0.1"
+solverforge-maps = "1.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -122,9 +122,6 @@ let expanded = bbox.expand_for_routing(&locations);   // Smart expansion (1.4x d
 // Queries
 let center: Coord = bbox.center();
 let contains: bool = bbox.contains(Coord::new(39.95, -75.15));
-
-// Cache key for persistence
-let key: String = bbox.cache_key();
 ```
 
 #### BBoxError
@@ -173,8 +170,9 @@ use solverforge_maps::SpeedProfile;
 
 let profile = SpeedProfile::default();
 
-// Get speed in meters per second
-let speed_mps: f64 = profile.speed_mps("motorway");  // ~27.78 m/s (100 km/h)
+// Get speed in meters per second (maxspeed tag, highway type)
+let speed_mps = profile.speed_mps(None, "motorway");       // ~27.78 m/s (100 km/h default)
+let speed_mps = profile.speed_mps(Some("50"), "motorway"); // ~13.89 m/s (50 km/h from tag)
 ```
 
 | Highway Type | Default Speed |
@@ -336,9 +334,6 @@ let locations = vec![
 // Async computation
 let geometries: HashMap<(usize, usize), Vec<Coord>> =
     network.compute_geometries(&locations, None).await;
-
-// Sync computation
-let geometries = network.compute_geometries_sync(&locations);
 
 // Access specific route geometry
 if let Some(route_geom) = geometries.get(&(0, 1)) {

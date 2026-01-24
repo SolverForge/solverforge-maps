@@ -1,42 +1,9 @@
 //! Bounding box for geographic queries.
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 use super::coord::Coord;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BBoxError {
-    MinLatGreaterThanMax { min: f64, max: f64 },
-    MinLngGreaterThanMax { min: f64, max: f64 },
-    LatOutOfRange { value: f64 },
-    LngOutOfRange { value: f64 },
-    NaN { field: &'static str },
-    Infinite { field: &'static str, value: f64 },
-}
-
-impl fmt::Display for BBoxError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BBoxError::MinLatGreaterThanMax { min, max } => {
-                write!(f, "min_lat {} is greater than max_lat {}", min, max)
-            }
-            BBoxError::MinLngGreaterThanMax { min, max } => {
-                write!(f, "min_lng {} is greater than max_lng {}", min, max)
-            }
-            BBoxError::LatOutOfRange { value } => {
-                write!(f, "latitude {} out of valid range [-90, 90]", value)
-            }
-            BBoxError::LngOutOfRange { value } => {
-                write!(f, "longitude {} out of valid range [-180, 180]", value)
-            }
-            BBoxError::NaN { field } => write!(f, "{} is NaN", field),
-            BBoxError::Infinite { field, value } => write!(f, "{} {} is infinite", field, value),
-        }
-    }
-}
-
-impl std::error::Error for BBoxError {}
+use super::error::BBoxError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoundingBox {
@@ -64,7 +31,6 @@ impl BoundingBox {
         }
     }
 
-    /// Attempts to create a new bounding box with validation.
     pub fn try_new(
         min_lat: f64,
         min_lng: f64,
