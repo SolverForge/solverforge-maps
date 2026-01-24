@@ -358,7 +358,7 @@ mod routing {
             // Urban areas with one-way streets may require up to 2x detours
             let ratio = route.distance_meters / straight_line_distance;
             assert!(
-                ratio >= 0.9 && ratio <= 2.5,
+                (0.9..=2.5).contains(&ratio),
                 "Route distance ({:.0}m) should be close to straight-line ({:.0}m), ratio: {:.2}",
                 route.distance_meters,
                 straight_line_distance,
@@ -508,6 +508,171 @@ mod routing {
             }
         }
     }
+
+    mod osrm_comparison {
+        use super::*;
+        use serde::Deserialize;
+
+        /// Philadelphia bounding box (cached data exists)
+        fn philadelphia_bbox() -> BoundingBox {
+            BoundingBox::new(39.946, -75.174, 39.962, -75.150)
+        }
+
+        /// City Hall area
+        fn city_hall() -> Coord {
+            Coord::new(39.9526, -75.1635)
+        }
+
+        /// Waterfront area
+        fn waterfront() -> Coord {
+            Coord::new(39.9496, -75.1503)
+        }
+
+        #[derive(Deserialize)]
+        struct OsrmResponse {
+            code: String,
+            routes: Vec<OsrmRoute>,
+        }
+
+        #[derive(Deserialize)]
+        struct OsrmRoute {
+            distance: f64,
+            duration: f64,
+            geometry: String,
+        }
+
+        async fn query_osrm(from: Coord, to: Coord) -> Option<OsrmRoute> {
+            let url = format!(
+                "https://router.project-osrm.org/route/v1/driving/{},{};{},{}?overview=full&geometries=polyline",
+                from.lng, from.lat, to.lng, to.lat
+            );
+            let resp: OsrmResponse = reqwest::get(&url).await.ok()?.json().await.ok()?;
+            if resp.code == "Ok" {
+                resp.routes.into_iter().next()
+            } else {
+                None
+            }
+        }
+
+        /// Compare route distances between solverforge and OSRM.
+        /// Tolerance: ±25% (accounts for different graph construction, speed profiles,
+        /// and road selection algorithms)
+        #[tokio::test]
+        async fn distance_matches_osrm() {
+            let bbox = philadelphia_bbox();
+            let config = NetworkConfig::default();
+
+            let network = RoadNetwork::load_or_fetch(&bbox, &config, None)
+                .await
+                .expect("Failed to load Philadelphia network");
+
+            let start = city_hall();
+            let end = waterfront();
+
+            let route = network.route(start, end).expect("Failed to compute route");
+
+            let Some(osrm_route) = query_osrm(start, end).await else {
+                eprintln!("OSRM unavailable, skipping test");
+                return;
+            };
+
+            let ratio = route.distance_meters / osrm_route.distance;
+            let tolerance = 0.25;
+
+            assert!(
+                (ratio - 1.0).abs() <= tolerance,
+                "Distance mismatch: solverforge={:.0}m, OSRM={:.0}m, ratio={:.2} (tolerance: ±{:.0}%)",
+                route.distance_meters,
+                osrm_route.distance,
+                ratio,
+                tolerance * 100.0
+            );
+        }
+
+        /// Compare travel times between solverforge and OSRM.
+        /// Tolerance: ±35% (OSRM uses different speed profiles, traffic data,
+        /// and turn costs)
+        #[tokio::test]
+        async fn duration_matches_osrm() {
+            let bbox = philadelphia_bbox();
+            let config = NetworkConfig::default();
+
+            let network = RoadNetwork::load_or_fetch(&bbox, &config, None)
+                .await
+                .expect("Failed to load Philadelphia network");
+
+            let start = city_hall();
+            let end = waterfront();
+
+            let route = network.route(start, end).expect("Failed to compute route");
+
+            let Some(osrm_route) = query_osrm(start, end).await else {
+                eprintln!("OSRM unavailable, skipping test");
+                return;
+            };
+
+            let ratio = route.duration_seconds as f64 / osrm_route.duration;
+            let tolerance = 0.35;
+
+            assert!(
+                (ratio - 1.0).abs() <= tolerance,
+                "Duration mismatch: solverforge={:.0}s, OSRM={:.0}s, ratio={:.2} (tolerance: ±{:.0}%)",
+                route.duration_seconds,
+                osrm_route.duration,
+                ratio,
+                tolerance * 100.0
+            );
+        }
+
+        /// Verify route geometries follow similar paths.
+        /// Tolerance: 250m deviation allowed (different snapping, road selection,
+        /// and one-way street handling)
+        #[tokio::test]
+        async fn geometry_similar_to_osrm() {
+            let bbox = philadelphia_bbox();
+            let config = NetworkConfig::default();
+
+            let network = RoadNetwork::load_or_fetch(&bbox, &config, None)
+                .await
+                .expect("Failed to load Philadelphia network");
+
+            let start = city_hall();
+            let end = waterfront();
+
+            let route = network.route(start, end).expect("Failed to compute route");
+
+            let Some(osrm_route) = query_osrm(start, end).await else {
+                eprintln!("OSRM unavailable, skipping test");
+                return;
+            };
+
+            let osrm_geometry = decode_polyline(&osrm_route.geometry);
+            if osrm_geometry.is_empty() {
+                eprintln!("OSRM returned empty geometry, skipping test");
+                return;
+            }
+
+            let max_deviation_m = 250.0;
+
+            // Sample points along solverforge route and check distance to OSRM route
+            let sample_step = (route.geometry.len() / 10).max(1);
+            for (i, point) in route.geometry.iter().enumerate().step_by(sample_step) {
+                // Find nearest point on OSRM route
+                let min_distance = osrm_geometry
+                    .iter()
+                    .map(|osrm_point| haversine_distance(*point, *osrm_point))
+                    .fold(f64::INFINITY, f64::min);
+
+                assert!(
+                    min_distance < max_deviation_m,
+                    "Geometry deviation at point {}: {:.0}m from OSRM route (threshold: {:.0}m)",
+                    i,
+                    min_distance,
+                    max_deviation_m
+                );
+            }
+        }
+    }
 }
 
 mod matrix {
@@ -639,7 +804,7 @@ mod visual {
             match RoadNetwork::load_or_fetch(&loc.bbox, &config, None).await {
                 Ok(network_ref) => {
                     println!(" done");
-                    plot_network(loc.name, &*network_ref, &loc.bbox);
+                    plot_network(loc.name, &network_ref, &loc.bbox);
                 }
                 Err(e) => {
                     println!(" failed: {}", e);
