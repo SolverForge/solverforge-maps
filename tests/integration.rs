@@ -150,8 +150,11 @@ mod types {
         #[test]
         fn speed_profile() {
             let profile = SpeedProfile::default();
-            let motorway_mps = profile.speed_mps("motorway");
+            let motorway_mps = profile.speed_mps(None, "motorway");
             assert!((motorway_mps - 27.78).abs() < 0.1);
+
+            let maxspeed_mps = profile.speed_mps(Some("50"), "motorway");
+            assert!((maxspeed_mps - 13.889).abs() < 0.1);
         }
     }
 }

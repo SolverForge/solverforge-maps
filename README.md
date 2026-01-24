@@ -170,8 +170,9 @@ use solverforge_maps::SpeedProfile;
 
 let profile = SpeedProfile::default();
 
-// Get speed in meters per second
-let speed_mps: f64 = profile.speed_mps("motorway");  // ~27.78 m/s (100 km/h)
+// Get speed in meters per second (maxspeed tag, highway type)
+let speed_mps = profile.speed_mps(None, "motorway");       // ~27.78 m/s (100 km/h default)
+let speed_mps = profile.speed_mps(Some("50"), "motorway"); // ~13.89 m/s (50 km/h from tag)
 ```
 
 | Highway Type | Default Speed |

@@ -259,13 +259,9 @@ out body;"#,
                     let highway = elem.tags.as_ref().and_then(|t| t.highway.as_deref());
                     let oneway = elem.tags.as_ref().and_then(|t| t.oneway.as_deref());
                     let maxspeed = elem.tags.as_ref().and_then(|t| t.maxspeed.as_deref());
-                    let speed = maxspeed
-                        .and_then(super::speed::parse_maxspeed)
-                        .unwrap_or_else(|| {
-                            config
-                                .speed_profile
-                                .speed_mps(highway.unwrap_or("residential"))
-                        });
+                    let speed = config
+                        .speed_profile
+                        .speed_mps(maxspeed, highway.unwrap_or("residential"));
                     let is_oneway_forward = matches!(oneway, Some("yes") | Some("1"));
                     let is_oneway_reverse = matches!(oneway, Some("-1"));
 

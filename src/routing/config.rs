@@ -35,8 +35,15 @@ impl Default for SpeedProfile {
 }
 
 impl SpeedProfile {
-    pub fn speed_mps(&self, highway: &str) -> f64 {
-        let kmh = match highway {
+    pub fn speed_mps(&self, maxspeed: Option<&str>, highway: &str) -> f64 {
+        let kmh = maxspeed
+            .and_then(|v| self.parse_maxspeed(v))
+            .unwrap_or_else(|| self.highway_speed(highway));
+        kmh * 1000.0 / 3600.0
+    }
+
+    fn highway_speed(&self, highway: &str) -> f64 {
+        match highway {
             "motorway" | "motorway_link" => self.motorway,
             "trunk" | "trunk_link" => self.trunk,
             "primary" | "primary_link" => self.primary,
@@ -47,8 +54,34 @@ impl SpeedProfile {
             "service" => self.service,
             "living_street" => self.living_street,
             _ => self.default,
+        }
+    }
+
+    fn parse_maxspeed(&self, value: &str) -> Option<f64> {
+        let value = value.trim();
+
+        match value.to_lowercase().as_str() {
+            "walk" => return Some(5.0),
+            "none" | "unlimited" => return None,
+            _ => {}
+        }
+
+        let (num_str, is_mph) = if let Some(s) = value.strip_suffix("mph") {
+            (s.trim(), true)
+        } else if let Some(s) = value.strip_suffix("km/h") {
+            (s.trim(), false)
+        } else if let Some(s) = value.strip_suffix("kmh") {
+            (s.trim(), false)
+        } else {
+            (value, false)
         };
-        kmh * 1000.0 / 3600.0
+
+        let kmh: f64 = num_str.parse().ok()?;
+        if kmh <= 0.0 || kmh > 300.0 {
+            return None;
+        }
+
+        Some(if is_mph { kmh * 1.60934 } else { kmh })
     }
 }
 
