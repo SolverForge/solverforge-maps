@@ -68,6 +68,8 @@ test: banner
 	@cargo test && \
 		printf "\n$(GREEN)$(CHECK) All tests passed$(RESET)\n\n" || \
 		(printf "\n$(RED)$(CROSS) Tests failed$(RESET)\n\n" && exit 1)
+	@printf "$(ARROW) $(BOLD)Visual test output:$(RESET)\n"
+	@cargo test visual --quiet -- --nocapture 2>/dev/null
 
 test-quick: banner
 	@printf "$(CYAN)$(BOLD)╔══════════════════════════════════════╗$(RESET)\n"

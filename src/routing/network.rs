@@ -232,13 +232,15 @@ impl RoadNetwork {
         self.edge_spatial_index = Some(RTree::bulk_load(segments));
     }
 
-    pub(super) fn nodes_iter(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
+    /// Iterate over all nodes as (lat, lng) pairs.
+    pub fn nodes_iter(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
         self.graph
             .node_indices()
             .filter_map(|idx| self.graph.node_weight(idx).map(|n| (n.lat, n.lng)))
     }
 
-    pub(super) fn edges_iter(&self) -> impl Iterator<Item = (usize, usize, f64, f64)> + '_ {
+    /// Iterate over all edges as (from_idx, to_idx, travel_time_s, distance_m) tuples.
+    pub fn edges_iter(&self) -> impl Iterator<Item = (usize, usize, f64, f64)> + '_ {
         self.graph.edge_indices().filter_map(|idx| {
             let (from, to) = self.graph.edge_endpoints(idx)?;
             let weight = self.graph.edge_weight(idx)?;
@@ -641,6 +643,44 @@ impl RoadNetwork {
 impl Default for RoadNetwork {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl RoadNetwork {
+    /// Build a network from raw node/edge data (for testing).
+    ///
+    /// # Arguments
+    /// * `nodes` - Slice of (lat, lng) tuples for each node
+    /// * `edges` - Slice of (from_idx, to_idx, time_s, dist_m) tuples
+    ///
+    /// # Example
+    /// ```
+    /// use solverforge_maps::RoadNetwork;
+    ///
+    /// let nodes = &[(40.0, -75.0), (39.8, -75.2)];
+    /// let edges = &[(0, 1, 60.0, 1000.0), (1, 0, 60.0, 1000.0)];
+    /// let network = RoadNetwork::from_test_data(nodes, edges);
+    ///
+    /// assert_eq!(network.node_count(), 2);
+    /// assert_eq!(network.edge_count(), 2);
+    /// ```
+    pub fn from_test_data(nodes: &[(f64, f64)], edges: &[(usize, usize, f64, f64)]) -> Self {
+        let mut network = Self::new();
+
+        // Add all nodes
+        for &(lat, lng) in nodes {
+            network.add_node_at(lat, lng);
+        }
+
+        // Add all edges
+        for &(from, to, time_s, dist_m) in edges {
+            network.add_edge_by_index(from, to, time_s, dist_m);
+        }
+
+        // Build spatial index for snapping
+        network.build_spatial_index();
+
+        network
     }
 }
 
