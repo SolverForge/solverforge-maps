@@ -11,6 +11,7 @@ mod matrix;
 mod network;
 mod osm;
 mod progress;
+mod speed;
 
 pub use bbox::BoundingBox;
 pub use cache::{CacheStats, NetworkRef};

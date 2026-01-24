@@ -12,7 +12,7 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 use super::bbox::BoundingBox;
 use super::network::RoadNetwork;
 
-pub const CACHE_VERSION: u32 = 4;
+pub const CACHE_VERSION: u32 = 5;
 
 static NETWORK_CACHE: OnceLock<RwLock<HashMap<String, RoadNetwork>>> = OnceLock::new();
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);

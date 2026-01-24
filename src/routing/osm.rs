@@ -22,8 +22,5 @@ pub struct OsmElement {
 pub struct OsmTags {
     pub highway: Option<String>,
     pub oneway: Option<String>,
-
-    /// TODO: Maxspeed tag (for future use with dynamic speed calculation).
-    #[allow(dead_code)]
     pub maxspeed: Option<String>,
 }
