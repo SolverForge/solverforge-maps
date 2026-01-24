@@ -19,7 +19,7 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 
 ```toml
 [dependencies]
-solverforge-maps = "0.1"
+solverforge-maps = "1.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
