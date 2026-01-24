@@ -1,15 +1,14 @@
 //! Road network graph core types and routing.
 
-use ordered_float::OrderedFloat;
-use petgraph::algo::astar;
-use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
-use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+use super::algo::{astar, kosaraju_scc};
 use super::coord::Coord;
 use super::error::RoutingError;
 use super::geo::{coord_key, haversine_distance};
+use super::graph::{DiGraph, EdgeIdx, NodeIdx};
+use super::spatial::{KdTree, Point2D, Segment, SegmentIndex};
 
 #[derive(Debug, Clone)]
 pub struct NodeData {
@@ -58,86 +57,21 @@ pub struct SnappedCoord {
     pub original: Coord,
     pub snapped: Coord,
     pub snap_distance_m: f64,
-    pub(crate) node_index: NodeIndex,
+    pub(crate) node_index: NodeIdx,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct RTreePoint {
-    lat: f64,
-    lng: f64,
-    node_index: NodeIndex,
-}
-
-impl RTreeObject for RTreePoint {
-    type Envelope = AABB<[f64; 2]>;
-
-    fn envelope(&self) -> Self::Envelope {
-        AABB::from_point([self.lat, self.lng])
-    }
-}
-
-impl PointDistance for RTreePoint {
-    fn distance_2(&self, point: &[f64; 2]) -> f64 {
-        let dlat = self.lat - point[0];
-        let dlng = self.lng - point[1];
-        dlat * dlat + dlng * dlng
-    }
-}
-
+/// Data stored in the point spatial index.
 #[derive(Debug, Clone, Copy)]
-struct RTreeSegment {
-    from_lat: f64,
-    from_lng: f64,
-    to_lat: f64,
-    to_lng: f64,
-    from_node: NodeIndex,
-    to_node: NodeIndex,
-    edge_index: EdgeIndex,
+struct SpatialPoint {
+    node_index: NodeIdx,
 }
 
-impl RTreeSegment {
-    /// Compute the closest point on this segment to the given point.
-    /// Returns (projected_lat, projected_lng, t) where t is the position along segment [0, 1].
-    fn project_point(&self, lat: f64, lng: f64) -> (f64, f64, f64) {
-        let dx = self.to_lng - self.from_lng;
-        let dy = self.to_lat - self.from_lat;
-        let len_sq = dx * dx + dy * dy;
-
-        if len_sq < f64::EPSILON {
-            // Degenerate segment (zero length)
-            return (self.from_lat, self.from_lng, 0.0);
-        }
-
-        // Project point onto line, clamped to [0, 1]
-        let t = ((lng - self.from_lng) * dx + (lat - self.from_lat) * dy) / len_sq;
-        let t = t.clamp(0.0, 1.0);
-
-        let proj_lat = self.from_lat + t * dy;
-        let proj_lng = self.from_lng + t * dx;
-
-        (proj_lat, proj_lng, t)
-    }
-}
-
-impl RTreeObject for RTreeSegment {
-    type Envelope = AABB<[f64; 2]>;
-
-    fn envelope(&self) -> Self::Envelope {
-        let min_lat = self.from_lat.min(self.to_lat);
-        let max_lat = self.from_lat.max(self.to_lat);
-        let min_lng = self.from_lng.min(self.to_lng);
-        let max_lng = self.from_lng.max(self.to_lng);
-        AABB::from_corners([min_lat, min_lng], [max_lat, max_lng])
-    }
-}
-
-impl PointDistance for RTreeSegment {
-    fn distance_2(&self, point: &[f64; 2]) -> f64 {
-        let (proj_lat, proj_lng, _) = self.project_point(point[0], point[1]);
-        let dlat = proj_lat - point[0];
-        let dlng = proj_lng - point[1];
-        dlat * dlat + dlng * dlng
-    }
+/// Data stored in the segment spatial index.
+#[derive(Debug, Clone, Copy)]
+struct SpatialSegment {
+    from_node: NodeIdx,
+    to_node: NodeIdx,
+    edge_index: EdgeIdx,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,17 +79,17 @@ pub struct EdgeSnappedLocation {
     pub original: Coord,
     pub snapped: Coord,
     pub snap_distance_m: f64,
-    pub(crate) edge_index: EdgeIndex,
+    pub(crate) edge_index: EdgeIdx,
     pub(crate) position: f64,
-    pub(crate) from_node: NodeIndex,
-    pub(crate) to_node: NodeIndex,
+    pub(crate) from_node: NodeIdx,
+    pub(crate) to_node: NodeIdx,
 }
 
 pub struct RoadNetwork {
     pub(super) graph: DiGraph<NodeData, EdgeData>,
-    pub(super) coord_to_node: HashMap<(i64, i64), NodeIndex>,
-    spatial_index: Option<RTree<RTreePoint>>,
-    edge_spatial_index: Option<RTree<RTreeSegment>>,
+    pub(super) coord_to_node: HashMap<(i64, i64), NodeIdx>,
+    spatial_index: Option<KdTree<SpatialPoint>>,
+    edge_spatial_index: Option<SegmentIndex<SpatialSegment>>,
 }
 
 impl RoadNetwork {
@@ -168,7 +102,7 @@ impl RoadNetwork {
         }
     }
 
-    pub(super) fn get_or_create_node(&mut self, lat: f64, lng: f64) -> NodeIndex {
+    pub(super) fn get_or_create_node(&mut self, lat: f64, lng: f64) -> NodeIdx {
         let key = coord_key(lat, lng);
         if let Some(&idx) = self.coord_to_node.get(&key) {
             idx
@@ -179,14 +113,14 @@ impl RoadNetwork {
         }
     }
 
-    pub(super) fn add_node_at(&mut self, lat: f64, lng: f64) -> NodeIndex {
+    pub(super) fn add_node_at(&mut self, lat: f64, lng: f64) -> NodeIdx {
         let idx = self.graph.add_node(NodeData { lat, lng });
         let key = coord_key(lat, lng);
         self.coord_to_node.insert(key, idx);
         idx
     }
 
-    pub(super) fn add_edge(&mut self, from: NodeIndex, to: NodeIndex, data: EdgeData) {
+    pub(super) fn add_edge(&mut self, from: NodeIdx, to: NodeIdx, data: EdgeData) {
         self.graph.add_edge(from, to, data);
     }
 
@@ -197,8 +131,8 @@ impl RoadNetwork {
         travel_time_s: f64,
         distance_m: f64,
     ) {
-        let from_idx = NodeIndex::new(from);
-        let to_idx = NodeIndex::new(to);
+        let from_idx = NodeIdx::new(from);
+        let to_idx = NodeIdx::new(to);
         self.graph.add_edge(
             from_idx,
             to_idx,
@@ -210,26 +144,46 @@ impl RoadNetwork {
     }
 
     pub(super) fn build_spatial_index(&mut self) {
-        let segments: Vec<RTreeSegment> = self
+        // Build point index for nodes
+        let points: Vec<(Point2D, SpatialPoint)> = self
+            .graph
+            .node_indices()
+            .filter_map(|node_idx| {
+                let node = self.graph.node_weight(node_idx)?;
+                Some((
+                    Point2D::new(node.lat, node.lng),
+                    SpatialPoint {
+                        node_index: node_idx,
+                    },
+                ))
+            })
+            .collect();
+
+        self.spatial_index = Some(KdTree::from_items(points));
+
+        // Build segment index for edges
+        let segments: Vec<(Segment, SpatialSegment)> = self
             .graph
             .edge_indices()
             .filter_map(|edge_idx| {
                 let (from_node, to_node) = self.graph.edge_endpoints(edge_idx)?;
                 let from_data = self.graph.node_weight(from_node)?;
                 let to_data = self.graph.node_weight(to_node)?;
-                Some(RTreeSegment {
-                    from_lat: from_data.lat,
-                    from_lng: from_data.lng,
-                    to_lat: to_data.lat,
-                    to_lng: to_data.lng,
-                    from_node,
-                    to_node,
-                    edge_index: edge_idx,
-                })
+                Some((
+                    Segment::new(
+                        Point2D::new(from_data.lat, from_data.lng),
+                        Point2D::new(to_data.lat, to_data.lng),
+                    ),
+                    SpatialSegment {
+                        from_node,
+                        to_node,
+                        edge_index: edge_idx,
+                    },
+                ))
             })
             .collect();
 
-        self.edge_spatial_index = Some(RTree::bulk_load(segments));
+        self.edge_spatial_index = Some(SegmentIndex::bulk_load(segments));
     }
 
     /// Iterate over all nodes as (lat, lng) pairs.
@@ -256,10 +210,10 @@ impl RoadNetwork {
     /// Snap a coordinate to the nearest node in the road network.
     ///
     /// Returns `None` if the network is empty.
-    pub fn snap_to_road(&self, coord: Coord) -> Option<NodeIndex> {
+    pub fn snap_to_road(&self, coord: Coord) -> Option<NodeIdx> {
         self.spatial_index
             .as_ref()?
-            .nearest_neighbor(&[coord.lat, coord.lng])
+            .nearest_neighbor(&Point2D::new(coord.lat, coord.lng))
             .map(|p| p.node_index)
     }
 
@@ -268,7 +222,7 @@ impl RoadNetwork {
     /// Returns a `SnappedCoord` containing both original and snapped coordinates,
     /// the snap distance, and an internal node index for routing.
     pub fn snap_to_road_detailed(&self, coord: Coord) -> Result<SnappedCoord, RoutingError> {
-        let rtree = self
+        let tree = self
             .spatial_index
             .as_ref()
             .ok_or(RoutingError::SnapFailed {
@@ -276,15 +230,24 @@ impl RoadNetwork {
                 nearest_distance_m: None,
             })?;
 
-        let nearest =
-            rtree
-                .nearest_neighbor(&[coord.lat, coord.lng])
+        let query = Point2D::new(coord.lat, coord.lng);
+        let (nearest, _dist_sq) =
+            tree.nearest_neighbor_with_distance(&query)
                 .ok_or(RoutingError::SnapFailed {
                     coord,
                     nearest_distance_m: None,
                 })?;
 
-        let snapped = Coord::new(nearest.lat, nearest.lng);
+        // Get the actual coordinates from the graph node
+        let node_data =
+            self.graph
+                .node_weight(nearest.node_index)
+                .ok_or(RoutingError::SnapFailed {
+                    coord,
+                    nearest_distance_m: None,
+                })?;
+
+        let snapped = Coord::new(node_data.lat, node_data.lng);
         let snap_distance_m = haversine_distance(coord, snapped);
 
         Ok(SnappedCoord {
@@ -300,7 +263,7 @@ impl RoadNetwork {
     /// This is production-grade snapping that projects the coordinate onto the
     /// nearest road segment rather than snapping to the nearest intersection.
     pub fn snap_to_edge(&self, coord: Coord) -> Result<EdgeSnappedLocation, RoutingError> {
-        let rtree = self
+        let index = self
             .edge_spatial_index
             .as_ref()
             .ok_or(RoutingError::SnapFailed {
@@ -308,27 +271,28 @@ impl RoadNetwork {
                 nearest_distance_m: None,
             })?;
 
-        let nearest =
-            rtree
-                .nearest_neighbor(&[coord.lat, coord.lng])
+        let query = Point2D::new(coord.lat, coord.lng);
+        let (segment, seg_data, proj_point, _dist_sq) =
+            index
+                .nearest_segment(&query)
                 .ok_or(RoutingError::SnapFailed {
                     coord,
                     nearest_distance_m: None,
                 })?;
 
-        // Project the point onto the segment
-        let (proj_lat, proj_lng, position) = nearest.project_point(coord.lat, coord.lng);
-        let snapped = Coord::new(proj_lat, proj_lng);
+        // Compute position along segment
+        let (_, position) = segment.project_point(&query);
+        let snapped = Coord::new(proj_point.x, proj_point.y);
         let snap_distance_m = haversine_distance(coord, snapped);
 
         Ok(EdgeSnappedLocation {
             original: coord,
             snapped,
             snap_distance_m,
-            edge_index: nearest.edge_index,
+            edge_index: seg_data.edge_index,
             position,
-            from_node: nearest.from_node,
-            to_node: nearest.to_node,
+            from_node: seg_data.from_node,
+            to_node: seg_data.to_node,
         })
     }
 
@@ -390,7 +354,7 @@ impl RoadNetwork {
         let cost_from_dest_to = to_edge.travel_time_s * (1.0 - to.position);
 
         // Try routing from from_node to both destination edge endpoints
-        let mut best_result: Option<(f64, Vec<NodeIndex>, NodeIndex, f64)> = None;
+        let mut best_result: Option<(f64, Vec<NodeIdx>, NodeIdx, f64)> = None;
 
         for &(start_node, start_cost) in &[
             (from.from_node, cost_to_from_node),
@@ -412,12 +376,12 @@ impl RoadNetwork {
                     &self.graph,
                     start_node,
                     |n| n == end_node,
-                    |e| OrderedFloat(e.weight().travel_time_s),
-                    |_| OrderedFloat(0.0),
+                    |e| e.travel_time_s,
+                    |_| 0.0,
                 );
 
                 if let Some((path_cost, path)) = result {
-                    let total_cost = start_cost + path_cost.0 + end_cost;
+                    let total_cost = start_cost + path_cost + end_cost;
                     if best_result.is_none() || total_cost < best_result.as_ref().unwrap().0 {
                         best_result = Some((total_cost, path, end_node, end_cost));
                     }
@@ -477,8 +441,8 @@ impl RoadNetwork {
             &self.graph,
             from.node_index,
             |n| n == to.node_index,
-            |e| OrderedFloat(e.weight().travel_time_s),
-            |_| OrderedFloat(0.0),
+            |e| e.travel_time_s,
+            |_| 0.0,
         );
 
         match result {
@@ -498,7 +462,7 @@ impl RoadNetwork {
                 }
 
                 Ok(RouteResult {
-                    duration_seconds: cost.0.round() as i64,
+                    duration_seconds: cost.round() as i64,
                     distance_meters: distance,
                     geometry,
                 })
@@ -532,15 +496,15 @@ impl RoadNetwork {
                 &self.graph,
                 start_snap.node_index,
                 |n| n == end_snap.node_index,
-                |e| OrderedFloat(e.weight().travel_time_s),
-                |_| OrderedFloat(0.0),
+                |e| e.travel_time_s,
+                |_| 0.0,
             ),
             Objective::Distance => astar(
                 &self.graph,
                 start_snap.node_index,
                 |n| n == end_snap.node_index,
-                |e| OrderedFloat(e.weight().distance_m),
-                |_| OrderedFloat(0.0),
+                |e| e.distance_m,
+                |_| 0.0,
             ),
         };
 
@@ -581,11 +545,11 @@ impl RoadNetwork {
     }
 
     pub fn strongly_connected_components(&self) -> usize {
-        petgraph::algo::kosaraju_scc(&self.graph).len()
+        kosaraju_scc(&self.graph).len()
     }
 
     pub fn largest_component_fraction(&self) -> f64 {
-        let sccs = petgraph::algo::kosaraju_scc(&self.graph);
+        let sccs = kosaraju_scc(&self.graph);
         if sccs.is_empty() {
             return 0.0;
         }
@@ -604,13 +568,13 @@ impl RoadNetwork {
 
     /// Filter the network to keep only the largest strongly connected component.
     pub fn filter_to_largest_scc(&mut self) {
-        let sccs = petgraph::algo::kosaraju_scc(&self.graph);
+        let sccs = kosaraju_scc(&self.graph);
         if sccs.len() <= 1 {
             return; // Already connected or empty
         }
 
         // Find the largest SCC
-        let largest_scc: HashSet<NodeIndex> = sccs
+        let largest_scc: HashSet<NodeIdx> = sccs
             .into_iter()
             .max_by_key(|scc| scc.len())
             .unwrap_or_default()
@@ -618,12 +582,7 @@ impl RoadNetwork {
             .collect();
 
         // Retain only nodes in the largest SCC
-        self.graph.retain_nodes(|g, n| {
-            // The callback receives the original graph and original node index
-            // We check if this node was in our largest SCC set
-            let _ = g; // unused, we use the pre-computed set
-            largest_scc.contains(&n)
-        });
+        self.graph.retain_nodes(|n, _| largest_scc.contains(&n));
 
         self.rebuild_coord_to_node();
         self.build_spatial_index();

@@ -1,5 +1,6 @@
-//! Local OSM road routing using Overpass API and petgraph.
+//! Local OSM road routing using Overpass API.
 
+mod algo;
 mod bbox;
 mod cache;
 mod config;
@@ -7,10 +8,12 @@ mod coord;
 mod error;
 mod fetch;
 mod geo;
+mod graph;
 mod matrix;
 mod network;
 mod osm;
 mod progress;
+mod spatial;
 
 pub use bbox::BoundingBox;
 pub use cache::{CacheStats, NetworkRef};

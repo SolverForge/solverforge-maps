@@ -1,12 +1,12 @@
 //! Matrix computation for road networks.
 
-use ordered_float::OrderedFloat;
-use petgraph::algo::dijkstra;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 
+use super::algo::dijkstra;
 use super::coord::Coord;
+use super::graph::NodeIdx;
 use super::network::{EdgeSnappedLocation, RoadNetwork, SnappedCoord};
 use super::progress::RoutingProgress;
 
@@ -194,7 +194,7 @@ impl RoadNetwork {
                         original: coord,
                         snapped: coord,
                         snap_distance_m: f64::INFINITY,
-                        node_index: petgraph::graph::NodeIndex::new(0),
+                        node_index: NodeIdx::new(0),
                     }
                 }
             })
@@ -229,12 +229,8 @@ impl RoadNetwork {
                 };
 
                 // Run Dijkstra from both endpoints of source edge to all nodes
-                let costs_a = dijkstra(graph, from.from_node, None, |e| {
-                    OrderedFloat(e.weight().travel_time_s)
-                });
-                let costs_b = dijkstra(graph, from.to_node, None, |e| {
-                    OrderedFloat(e.weight().travel_time_s)
-                });
+                let costs_a = dijkstra(graph, from.from_node, None, |e| e.travel_time_s);
+                let costs_b = dijkstra(graph, from.to_node, None, |e| e.travel_time_s);
 
                 // Offset from snap point to each endpoint
                 let off_a = from_edge.travel_time_s * from.position;
@@ -264,16 +260,16 @@ impl RoadNetwork {
                     // Best of 4 combinations: (from endpoint) -> (to endpoint)
                     let mut best = f64::MAX;
                     if let Some(&c) = costs_a.get(&to.from_node) {
-                        best = best.min(off_a + c.0 + to_off_a);
+                        best = best.min(off_a + c + to_off_a);
                     }
                     if let Some(&c) = costs_a.get(&to.to_node) {
-                        best = best.min(off_a + c.0 + to_off_b);
+                        best = best.min(off_a + c + to_off_b);
                     }
                     if let Some(&c) = costs_b.get(&to.from_node) {
-                        best = best.min(off_b + c.0 + to_off_a);
+                        best = best.min(off_b + c + to_off_a);
                     }
                     if let Some(&c) = costs_b.get(&to.to_node) {
-                        best = best.min(off_b + c.0 + to_off_b);
+                        best = best.min(off_b + c + to_off_b);
                     }
 
                     row[j] = if best == f64::MAX {
