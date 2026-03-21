@@ -8,8 +8,8 @@
 //! #[tokio::main]
 //! async fn main() -> RoutingResult<()> {
 //!     let locations = vec![
-//!         Coord::new(39.95, -75.16),
-//!         Coord::new(39.96, -75.17),
+//!         Coord::try_new(39.95, -75.16)?,
+//!         Coord::try_new(39.96, -75.17)?,
 //!     ];
 //!
 //!     let bbox = BoundingBox::from_coords(&locations).expand(0.1);
