@@ -30,9 +30,6 @@ pub enum RoutingProgress {
         pair: usize,
         total: usize,
     },
-    EncodingGeometries {
-        percent: u8,
-    },
     Complete,
 }
 
@@ -45,7 +42,6 @@ impl RoutingProgress {
             Self::BuildingGraph { percent } => *percent,
             Self::ComputingMatrix { percent, .. } => *percent,
             Self::ComputingGeometries { percent, .. } => *percent,
-            Self::EncodingGeometries { percent } => *percent,
             Self::Complete => 100,
         }
     }
@@ -58,7 +54,6 @@ impl RoutingProgress {
             Self::BuildingGraph { .. } => ("building", "Building routing graph..."),
             Self::ComputingMatrix { .. } => ("matrix", "Computing travel times..."),
             Self::ComputingGeometries { .. } => ("geometry", "Computing route geometries..."),
-            Self::EncodingGeometries { .. } => ("encoding", "Encoding geometries..."),
             Self::Complete => ("complete", "Ready!"),
         }
     }
