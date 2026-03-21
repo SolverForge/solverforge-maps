@@ -85,6 +85,13 @@ pub struct EdgeSnappedLocation {
     pub(crate) to_node: NodeIdx,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct EdgeTraversal {
+    node: NodeIdx,
+    time_s: f64,
+    distance_m: f64,
+}
+
 pub struct RoadNetwork {
     pub(super) graph: DiGraph<NodeData, EdgeData>,
     pub(super) coord_to_node: HashMap<(i64, i64), NodeIdx>,
@@ -333,11 +340,18 @@ impl RoadNetwork {
                 to: to.original,
             })?;
 
-        // If both snapped to the same edge, check if direct travel is possible
+        // Same-edge travel is only valid in the edge's forward direction.
         if from.edge_index == to.edge_index {
+            if to.position < from.position {
+                return Err(RoutingError::NoPath {
+                    from: from.original,
+                    to: to.original,
+                });
+            }
+
             let segment_time = from_edge.travel_time_s;
             let segment_dist = from_edge.distance_m;
-            let travel_fraction = (to.position - from.position).abs();
+            let travel_fraction = to.position - from.position;
             return Ok(RouteResult {
                 duration_seconds: (segment_time * travel_fraction).round() as i64,
                 distance_meters: segment_dist * travel_fraction,
@@ -345,64 +359,46 @@ impl RoadNetwork {
             });
         }
 
-        // Cost from snap point to from_node (going backward on edge)
-        let cost_to_from_node = from_edge.travel_time_s * from.position;
-        // Cost from snap point to to_node (going forward on edge)
-        let cost_to_to_node = from_edge.travel_time_s * (1.0 - from.position);
+        let start_exit = EdgeTraversal {
+            node: from.to_node,
+            time_s: from_edge.travel_time_s * (1.0 - from.position),
+            distance_m: from_edge.distance_m * (1.0 - from.position),
+        };
+        let end_entry = EdgeTraversal {
+            node: to.from_node,
+            time_s: to_edge.travel_time_s * to.position,
+            distance_m: to_edge.distance_m * to.position,
+        };
 
-        // Cost from to_edge's from_node to snap point
-        let cost_from_dest_from = to_edge.travel_time_s * to.position;
-        // Cost from to_edge's to_node to snap point
-        let cost_from_dest_to = to_edge.travel_time_s * (1.0 - to.position);
-
-        // Try routing from from_node to both destination edge endpoints
-        let mut best_result: Option<(f64, Vec<NodeIdx>, NodeIdx, f64)> = None;
-
-        for &(start_node, start_cost) in &[
-            (from.from_node, cost_to_from_node),
-            (from.to_node, cost_to_to_node),
-        ] {
-            for &(end_node, end_cost) in &[
-                (to.from_node, cost_from_dest_from),
-                (to.to_node, cost_from_dest_to),
-            ] {
-                if start_node == end_node {
-                    let total_cost = start_cost + end_cost;
-                    if best_result.is_none() || total_cost < best_result.as_ref().unwrap().0 {
-                        best_result = Some((total_cost, vec![start_node], end_node, end_cost));
-                    }
-                    continue;
-                }
-
-                let result = astar(
-                    &self.graph,
-                    start_node,
-                    |n| n == end_node,
-                    |e| e.travel_time_s,
-                    |_| 0.0,
-                );
-
-                if let Some((path_cost, path)) = result {
-                    let total_cost = start_cost + path_cost + end_cost;
-                    if best_result.is_none() || total_cost < best_result.as_ref().unwrap().0 {
-                        best_result = Some((total_cost, path, end_node, end_cost));
-                    }
-                }
-            }
-        }
+        let best_result = if start_exit.node == end_entry.node {
+            Some((start_exit.time_s + end_entry.time_s, vec![start_exit.node]))
+        } else {
+            astar(
+                &self.graph,
+                start_exit.node,
+                |n| n == end_entry.node,
+                |e| e.travel_time_s,
+                |_| 0.0,
+            )
+            .map(|(path_cost, path)| (start_exit.time_s + path_cost + end_entry.time_s, path))
+        };
 
         match best_result {
-            Some((total_cost, path, _, _)) => {
+            Some((total_cost, path)) => {
                 let mut geometry = vec![from.snapped];
                 for &idx in &path {
                     if let Some(node) = self.graph.node_weight(idx) {
-                        geometry.push(node.coord());
+                        let coord = node.coord();
+                        if geometry.last().copied() != Some(coord) {
+                            geometry.push(coord);
+                        }
                     }
                 }
-                geometry.push(to.snapped);
+                if geometry.last().copied() != Some(to.snapped) {
+                    geometry.push(to.snapped);
+                }
 
-                let mut distance = 0.0;
-                distance += from_edge.distance_m * from.position.min(1.0 - from.position);
+                let mut distance = start_exit.distance_m;
                 for window in path.windows(2) {
                     if let Some(edge) = self.graph.find_edge(window[0], window[1]) {
                         if let Some(weight) = self.graph.edge_weight(edge) {
@@ -411,7 +407,7 @@ impl RoadNetwork {
                     }
                 }
 
-                distance += to_edge.distance_m * to.position.min(1.0 - to.position);
+                distance += end_entry.distance_m;
 
                 Ok(RouteResult {
                     duration_seconds: total_cost.round() as i64,
