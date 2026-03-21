@@ -17,7 +17,7 @@ mod spatial;
 
 pub use bbox::BoundingBox;
 pub use cache::{CacheStats, NetworkRef};
-pub use config::{NetworkConfig, SpeedProfile};
+pub use config::{ConnectivityPolicy, NetworkConfig, SpeedProfile};
 pub use coord::Coord;
 pub use error::{BBoxError, CoordError, RoutingError};
 pub use matrix::{TravelTimeMatrix, UNREACHABLE};

@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use solverforge_maps::{
-    decode_polyline, encode_polyline, haversine_distance, BBoxError, BoundingBox, Coord,
-    CoordError, NetworkConfig, RoadNetwork, RouteResult, RoutingError, SpeedProfile, UNREACHABLE,
+    decode_polyline, encode_polyline, haversine_distance, BBoxError, BoundingBox,
+    ConnectivityPolicy, Coord, CoordError, NetworkConfig, RoadNetwork, RouteResult, RoutingError,
+    SpeedProfile, UNREACHABLE,
 };
 
 mod types {
@@ -140,11 +141,16 @@ mod types {
             let config = NetworkConfig::new()
                 .overpass_url("https://custom.api/interpreter")
                 .cache_dir("/tmp/cache")
-                .connect_timeout(Duration::from_secs(60));
+                .connect_timeout(Duration::from_secs(60))
+                .connectivity_policy(ConnectivityPolicy::LargestStronglyConnectedComponent);
 
             assert_eq!(config.overpass_url, "https://custom.api/interpreter");
             assert_eq!(config.cache_dir, PathBuf::from("/tmp/cache"));
             assert_eq!(config.connect_timeout, Duration::from_secs(60));
+            assert_eq!(
+                config.connectivity_policy,
+                ConnectivityPolicy::LargestStronglyConnectedComponent
+            );
         }
 
         #[test]
@@ -155,6 +161,12 @@ mod types {
 
             let maxspeed_mps = profile.speed_mps(Some("50"), "motorway");
             assert!((maxspeed_mps - 13.889).abs() < 0.1);
+        }
+
+        #[test]
+        fn default_connectivity_policy_keeps_all_components() {
+            let config = NetworkConfig::default();
+            assert_eq!(config.connectivity_policy, ConnectivityPolicy::KeepAll);
         }
     }
 }
@@ -241,6 +253,27 @@ mod routing {
             let network = RoadNetwork::new();
             assert_eq!(network.strongly_connected_components(), 0);
             assert!((network.largest_component_fraction() - 0.0).abs() < f64::EPSILON);
+        }
+
+        #[test]
+        fn largest_scc_filter_is_opt_in() {
+            let mut network = RoadNetwork::from_test_data(
+                &[(0.0, 0.0), (0.0, 1.0), (10.0, 10.0), (10.0, 11.0)],
+                &[
+                    (0, 1, 10.0, 100.0),
+                    (1, 0, 10.0, 100.0),
+                    (2, 3, 10.0, 100.0),
+                ],
+            );
+
+            assert_eq!(network.node_count(), 4);
+            assert_eq!(network.strongly_connected_components(), 3);
+
+            network.filter_to_largest_scc();
+
+            assert_eq!(network.node_count(), 2);
+            assert_eq!(network.edge_count(), 2);
+            assert_eq!(network.strongly_connected_components(), 1);
         }
     }
 
