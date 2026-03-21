@@ -11,7 +11,7 @@ use super::cache::{
     cache, record_hit, record_miss, CachedEdge, CachedNetwork, CachedNode, NetworkRef,
     CACHE_VERSION,
 };
-use super::config::NetworkConfig;
+use super::config::{ConnectivityPolicy, NetworkConfig};
 use super::coord::Coord;
 use super::error::RoutingError;
 use super::network::{EdgeData, RoadNetwork};
@@ -60,7 +60,7 @@ impl RoadNetwork {
                     if let Some(tx) = progress {
                         let _ = tx.send(RoutingProgress::CheckingCache { percent: 8 }).await;
                     }
-                    match Self::load_from_file(&cache_path).await {
+                    match Self::load_from_file(&cache_path, config).await {
                         Ok(n) => {
                             if let Some(tx) = progress {
                                 let _ = tx
@@ -314,19 +314,30 @@ out body;"#,
             way_count
         );
 
-        // Filter to largest strongly connected component to ensure all nodes are reachable
         let scc_count = network.strongly_connected_components();
-        if scc_count > 1 {
-            info!(
-                "Road network has {} SCCs, filtering to largest component",
-                scc_count
-            );
-            network.filter_to_largest_scc();
-            info!(
-                "After SCC filter: {} nodes, {} edges",
-                network.node_count(),
-                network.edge_count()
-            );
+        match config.connectivity_policy {
+            ConnectivityPolicy::KeepAll => {
+                if scc_count > 1 {
+                    info!(
+                        "Road network has {} SCCs, preserving all components by configuration",
+                        scc_count
+                    );
+                }
+            }
+            ConnectivityPolicy::LargestStronglyConnectedComponent => {
+                if scc_count > 1 {
+                    info!(
+                        "Road network has {} SCCs, filtering to largest component",
+                        scc_count
+                    );
+                    network.filter_to_largest_scc();
+                    info!(
+                        "After SCC filter: {} nodes, {} edges",
+                        network.node_count(),
+                        network.edge_count()
+                    );
+                }
+            }
         }
 
         network.build_spatial_index();
@@ -334,7 +345,7 @@ out body;"#,
         Ok(network)
     }
 
-    async fn load_from_file(path: &Path) -> Result<Self, RoutingError> {
+    async fn load_from_file(path: &Path, config: &NetworkConfig) -> Result<Self, RoutingError> {
         let data = tokio::fs::read_to_string(path).await?;
 
         let cached: CachedNetwork = match serde_json::from_str(&data) {
@@ -365,19 +376,30 @@ out body;"#,
             network.add_edge_by_index(edge.from, edge.to, edge.travel_time_s, edge.distance_m);
         }
 
-        // Filter to largest SCC (cached networks from older versions may not be filtered)
         let scc_count = network.strongly_connected_components();
-        if scc_count > 1 {
-            info!(
-                "Cached network has {} SCCs, filtering to largest component",
-                scc_count
-            );
-            network.filter_to_largest_scc();
-            info!(
-                "After SCC filter: {} nodes, {} edges",
-                network.node_count(),
-                network.edge_count()
-            );
+        match config.connectivity_policy {
+            ConnectivityPolicy::KeepAll => {
+                if scc_count > 1 {
+                    info!(
+                        "Cached network has {} SCCs, preserving all components by configuration",
+                        scc_count
+                    );
+                }
+            }
+            ConnectivityPolicy::LargestStronglyConnectedComponent => {
+                if scc_count > 1 {
+                    info!(
+                        "Cached network has {} SCCs, filtering to largest component",
+                        scc_count
+                    );
+                    network.filter_to_largest_scc();
+                    info!(
+                        "After SCC filter: {} nodes, {} edges",
+                        network.node_count(),
+                        network.edge_count()
+                    );
+                }
+            }
         }
 
         network.build_spatial_index();

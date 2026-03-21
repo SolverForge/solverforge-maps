@@ -3,6 +3,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectivityPolicy {
+    KeepAll,
+    LargestStronglyConnectedComponent,
+}
+
 #[derive(Debug, Clone)]
 pub struct SpeedProfile {
     pub motorway: f64,
@@ -92,6 +98,7 @@ pub struct NetworkConfig {
     pub connect_timeout: Duration,
     pub read_timeout: Duration,
     pub speed_profile: SpeedProfile,
+    pub connectivity_policy: ConnectivityPolicy,
     pub highway_types: Vec<&'static str>,
 }
 
@@ -103,6 +110,7 @@ impl Default for NetworkConfig {
             connect_timeout: Duration::from_secs(30),
             read_timeout: Duration::from_secs(180),
             speed_profile: SpeedProfile::default(),
+            connectivity_policy: ConnectivityPolicy::KeepAll,
             highway_types: vec![
                 "motorway",
                 "trunk",
@@ -145,6 +153,11 @@ impl NetworkConfig {
 
     pub fn speed_profile(mut self, profile: SpeedProfile) -> Self {
         self.speed_profile = profile;
+        self
+    }
+
+    pub fn connectivity_policy(mut self, policy: ConnectivityPolicy) -> Self {
+        self.connectivity_policy = policy;
         self
     }
 
