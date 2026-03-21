@@ -275,6 +275,90 @@ mod routing {
             assert_eq!(simplified.geometry[simplified.geometry.len() - 1], last);
         }
     }
+
+    mod edge_snapped {
+        use super::*;
+
+        #[test]
+        fn same_edge_forward_uses_directed_partial_distance() {
+            let network =
+                RoadNetwork::from_test_data(&[(0.0, 0.0), (0.0, 1.0)], &[(0, 1, 100.0, 1000.0)]);
+            let from = network
+                .snap_to_edge(Coord::new(0.0, 0.2))
+                .expect("Failed to snap start");
+            let to = network
+                .snap_to_edge(Coord::new(0.0, 0.8))
+                .expect("Failed to snap end");
+
+            let route = network
+                .route_edge_snapped(&from, &to)
+                .expect("Expected forward travel on same edge");
+
+            assert_eq!(route.duration_seconds, 60);
+            assert!((route.distance_meters - 600.0).abs() < 1e-6);
+            assert_eq!(route.geometry, vec![from.snapped, to.snapped]);
+        }
+
+        #[test]
+        fn same_edge_reverse_returns_no_path() {
+            let network =
+                RoadNetwork::from_test_data(&[(0.0, 0.0), (0.0, 1.0)], &[(0, 1, 100.0, 1000.0)]);
+            let from = network
+                .snap_to_edge(Coord::new(0.0, 0.8))
+                .expect("Failed to snap start");
+            let to = network
+                .snap_to_edge(Coord::new(0.0, 0.2))
+                .expect("Failed to snap end");
+
+            let result = network.route_edge_snapped(&from, &to);
+            assert!(matches!(result, Err(RoutingError::NoPath { .. })));
+        }
+
+        #[test]
+        fn reverse_only_edge_respects_edge_orientation() {
+            let network =
+                RoadNetwork::from_test_data(&[(0.0, 0.0), (0.0, 1.0)], &[(1, 0, 100.0, 1000.0)]);
+            let from = network
+                .snap_to_edge(Coord::new(0.0, 0.8))
+                .expect("Failed to snap start");
+            let to = network
+                .snap_to_edge(Coord::new(0.0, 0.2))
+                .expect("Failed to snap end");
+
+            let route = network
+                .route_edge_snapped(&from, &to)
+                .expect("Expected travel in reverse edge direction");
+
+            assert_eq!(route.duration_seconds, 60);
+            assert!((route.distance_meters - 600.0).abs() < 1e-6);
+            assert_eq!(route.geometry, vec![from.snapped, to.snapped]);
+        }
+
+        #[test]
+        fn cross_edge_route_counts_selected_partials() {
+            let network = RoadNetwork::from_test_data(
+                &[(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)],
+                &[(0, 1, 100.0, 1000.0), (1, 2, 200.0, 2000.0)],
+            );
+            let from = network
+                .snap_to_edge(Coord::new(0.0, 0.25))
+                .expect("Failed to snap start");
+            let to = network
+                .snap_to_edge(Coord::new(0.0, 1.5))
+                .expect("Failed to snap end");
+
+            let route = network
+                .route_edge_snapped(&from, &to)
+                .expect("Expected route across adjacent directed edges");
+
+            assert_eq!(route.duration_seconds, 175);
+            assert!((route.distance_meters - 1750.0).abs() < 1e-6);
+            assert_eq!(
+                route.geometry,
+                vec![from.snapped, Coord::new(0.0, 1.0), to.snapped]
+            );
+        }
+    }
 }
 
 mod matrix {
