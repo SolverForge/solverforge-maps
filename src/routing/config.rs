@@ -94,6 +94,9 @@ impl SpeedProfile {
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
     pub overpass_url: String,
+    pub overpass_endpoints: Vec<String>,
+    pub overpass_max_retries: usize,
+    pub overpass_retry_backoff: Duration,
     pub cache_dir: PathBuf,
     pub connect_timeout: Duration,
     pub read_timeout: Duration,
@@ -104,8 +107,12 @@ pub struct NetworkConfig {
 
 impl Default for NetworkConfig {
     fn default() -> Self {
+        let default_overpass = "https://overpass-api.de/api/interpreter".to_string();
         Self {
-            overpass_url: "https://overpass-api.de/api/interpreter".to_string(),
+            overpass_url: default_overpass.clone(),
+            overpass_endpoints: vec![default_overpass],
+            overpass_max_retries: 2,
+            overpass_retry_backoff: Duration::from_secs(2),
             cache_dir: PathBuf::from(".osm_cache"),
             connect_timeout: Duration::from_secs(30),
             read_timeout: Duration::from_secs(180),
@@ -132,7 +139,27 @@ impl NetworkConfig {
     }
 
     pub fn overpass_url(mut self, url: impl Into<String>) -> Self {
-        self.overpass_url = url.into();
+        let url = url.into();
+        self.overpass_url = url.clone();
+        self.overpass_endpoints = vec![url];
+        self
+    }
+
+    pub fn overpass_endpoints(mut self, urls: Vec<String>) -> Self {
+        if let Some(primary) = urls.first().cloned() {
+            self.overpass_url = primary;
+            self.overpass_endpoints = urls;
+        }
+        self
+    }
+
+    pub fn overpass_max_retries(mut self, retries: usize) -> Self {
+        self.overpass_max_retries = retries;
+        self
+    }
+
+    pub fn overpass_retry_backoff(mut self, backoff: Duration) -> Self {
+        self.overpass_retry_backoff = backoff;
         self
     }
 

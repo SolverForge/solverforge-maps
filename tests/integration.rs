@@ -133,6 +133,11 @@ mod types {
                 config.overpass_url,
                 "https://overpass-api.de/api/interpreter"
             );
+            assert_eq!(
+                config.overpass_endpoints,
+                vec!["https://overpass-api.de/api/interpreter".to_string()]
+            );
+            assert_eq!(config.overpass_max_retries, 2);
             assert_eq!(config.cache_dir, PathBuf::from(".osm_cache"));
         }
 
@@ -140,16 +145,41 @@ mod types {
         fn builder_pattern() {
             let config = NetworkConfig::new()
                 .overpass_url("https://custom.api/interpreter")
+                .overpass_max_retries(4)
+                .overpass_retry_backoff(Duration::from_secs(3))
                 .cache_dir("/tmp/cache")
                 .connect_timeout(Duration::from_secs(60))
                 .connectivity_policy(ConnectivityPolicy::LargestStronglyConnectedComponent);
 
             assert_eq!(config.overpass_url, "https://custom.api/interpreter");
+            assert_eq!(
+                config.overpass_endpoints,
+                vec!["https://custom.api/interpreter".to_string()]
+            );
+            assert_eq!(config.overpass_max_retries, 4);
+            assert_eq!(config.overpass_retry_backoff, Duration::from_secs(3));
             assert_eq!(config.cache_dir, PathBuf::from("/tmp/cache"));
             assert_eq!(config.connect_timeout, Duration::from_secs(60));
             assert_eq!(
                 config.connectivity_policy,
                 ConnectivityPolicy::LargestStronglyConnectedComponent
+            );
+        }
+
+        #[test]
+        fn overpass_endpoint_pool_builder() {
+            let config = NetworkConfig::new().overpass_endpoints(vec![
+                "https://a.example/api/interpreter".to_string(),
+                "https://b.example/api/interpreter".to_string(),
+            ]);
+
+            assert_eq!(config.overpass_url, "https://a.example/api/interpreter");
+            assert_eq!(
+                config.overpass_endpoints,
+                vec![
+                    "https://a.example/api/interpreter".to_string(),
+                    "https://b.example/api/interpreter".to_string(),
+                ]
             );
         }
 
