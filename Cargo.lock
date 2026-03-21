@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "solverforge-maps"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "rayon",
  "reqwest",
