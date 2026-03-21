@@ -31,8 +31,8 @@ use solverforge_maps::{BoundingBox, Coord, NetworkConfig, RoadNetwork, RoutingRe
 #[tokio::main]
 async fn main() -> RoutingResult<()> {
     let locations = vec![
-        Coord::new(39.95, -75.16),
-        Coord::new(39.96, -75.17),
+        Coord::try_new(39.95, -75.16)?,
+        Coord::try_new(39.96, -75.17)?,
     ];
 
     let bbox = BoundingBox::from_coords(&locations).expand_for_routing(&locations);
@@ -59,18 +59,18 @@ Geographic coordinate with latitude and longitude. Validates input on constructi
 ```rust
 use solverforge_maps::{Coord, CoordError};
 
-// Panics on invalid input (NaN, infinite, out of range)
-let coord = Coord::new(39.95, -75.16);
+// Use try_new for external or user-provided input
+let coord = Coord::try_new(39.95, -75.16)?;
 
 // Fallible construction
 let coord: Result<Coord, CoordError> = Coord::try_new(91.0, -75.16);
 assert!(matches!(coord, Err(CoordError::LatOutOfRange { .. })));
 
-// Valid ranges: lat [-90, 90], lng [-180, 180]
-let coord = Coord::try_new(39.95, -75.16).unwrap();
+// Coord::new is still fine for trusted literals that are guaranteed valid
+let trusted_coord = Coord::new(39.95, -75.16);
 
 // Distance calculation
-let other = Coord::new(39.96, -75.17);
+let other = Coord::try_new(39.96, -75.17)?;
 let distance_meters = coord.distance_to(other);
 
 // Tuple conversion
@@ -100,8 +100,8 @@ Rectangular geographic region. Validates that min < max on construction.
 ```rust
 use solverforge_maps::{BoundingBox, BBoxError, Coord};
 
-// Panics if min > max
-let bbox = BoundingBox::new(39.9, -75.2, 40.0, -75.1);
+// Use try_new when bounds come from external input
+let bbox = BoundingBox::try_new(39.9, -75.2, 40.0, -75.1)?;
 
 // Fallible construction
 let bbox: Result<BoundingBox, BBoxError> = BoundingBox::try_new(40.0, -75.2, 39.9, -75.1);
@@ -109,8 +109,8 @@ assert!(matches!(bbox, Err(BBoxError::MinLatGreaterThanMax { .. })));
 
 // From coordinates
 let locations = vec![
-    Coord::new(39.95, -75.16),
-    Coord::new(39.96, -75.17),
+    Coord::try_new(39.95, -75.16)?,
+    Coord::try_new(39.96, -75.17)?,
 ];
 let bbox = BoundingBox::from_coords(&locations);
 
@@ -121,8 +121,11 @@ let expanded = bbox.expand_for_routing(&locations);   // Smart expansion (1.4x d
 
 // Queries
 let center: Coord = bbox.center();
-let contains: bool = bbox.contains(Coord::new(39.95, -75.15));
+let contains: bool = bbox.contains(Coord::try_new(39.95, -75.15)?);
 ```
+
+`BoundingBox::new` remains appropriate when the bounds are compile-time literals
+or otherwise already validated before construction.
 
 #### BBoxError
 
@@ -198,7 +201,7 @@ Core routing engine built from OSM data.
 ```rust
 use solverforge_maps::{BoundingBox, NetworkConfig, RoadNetwork, NetworkRef};
 
-let bbox = BoundingBox::new(39.9, -75.2, 40.0, -75.1);
+let bbox = BoundingBox::try_new(39.9, -75.2, 40.0, -75.1)?;
 let config = NetworkConfig::default();
 
 // Load from cache or fetch from API (returns cached reference)
@@ -221,8 +224,8 @@ than at snapped nodes, use `snap_to_edge` with `route_edge_snapped`.
 ```rust
 use solverforge_maps::{Coord, Objective, RouteResult, RoutingError};
 
-let from = Coord::new(39.95, -75.16);
-let to = Coord::new(39.96, -75.17);
+let from = Coord::try_new(39.95, -75.16)?;
+let to = Coord::try_new(39.96, -75.17)?;
 
 // Route by minimum travel time (default). Endpoints are snapped to nearest nodes.
 let route: Result<RouteResult, RoutingError> = network.route(from, to);
@@ -248,8 +251,8 @@ nearest road segments instead of the nearest graph nodes.
 ```rust
 use solverforge_maps::{Coord, RouteResult, RoutingError};
 
-let from = Coord::new(39.95, -75.16);
-let to = Coord::new(39.96, -75.17);
+let from = Coord::try_new(39.95, -75.16)?;
+let to = Coord::try_new(39.96, -75.17)?;
 
 let from_edge = network.snap_to_edge(from)?;
 let to_edge = network.snap_to_edge(to)?;
@@ -261,7 +264,7 @@ let route: Result<RouteResult, RoutingError> = network.route_edge_snapped(&from_
 ```rust
 use solverforge_maps::{Coord, SnappedCoord, RoutingError};
 
-let coord = Coord::new(39.95, -75.16);
+let coord = Coord::try_new(39.95, -75.16)?;
 
 // Simple snap (returns None if network is empty)
 let node = network.snap_to_road(coord);
@@ -306,9 +309,9 @@ Travel time matrix with metadata and analysis methods.
 use solverforge_maps::{Coord, TravelTimeMatrix, UNREACHABLE};
 
 let locations = vec![
-    Coord::new(39.95, -75.16),
-    Coord::new(39.96, -75.17),
-    Coord::new(39.94, -75.15),
+    Coord::try_new(39.95, -75.16)?,
+    Coord::try_new(39.96, -75.17)?,
+    Coord::try_new(39.94, -75.15)?,
 ];
 
 // Compute matrix (async, parallel via rayon internally)
