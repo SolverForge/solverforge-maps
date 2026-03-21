@@ -595,13 +595,21 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::OnceLock;
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use tokio::sync::Mutex;
     use tokio::time::sleep;
 
     use super::*;
     use crate::routing::BoundingBox;
+
+    static FETCH_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn fetch_test_lock() -> &'static Mutex<()> {
+        FETCH_TEST_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn test_network() -> RoadNetwork {
         RoadNetwork::from_test_data(&[(0.0, 0.0), (0.0, 0.01)], &[(0, 1, 60.0, 1_000.0)])
@@ -614,6 +622,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_or_insert_allows_different_keys_to_progress_concurrently() {
+        let _guard = fetch_test_lock().lock().await;
         reset_test_state().await;
 
         let start = Instant::now();
@@ -645,6 +654,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_or_insert_deduplicates_same_key_work() {
+        let _guard = fetch_test_lock().lock().await;
         reset_test_state().await;
 
         let loads = Arc::new(AtomicUsize::new(0));
@@ -725,6 +735,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_retries_same_endpoint_until_success() {
+        let _guard = fetch_test_lock().lock().await;
         let (endpoint, requests, handle) = spawn_overpass_server(vec![
             ("429 Too Many Requests", r#"{"elements":[]}"#),
             ("200 OK", overpass_fixture_json()),
@@ -747,6 +758,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_falls_back_to_second_endpoint() {
+        let _guard = fetch_test_lock().lock().await;
         let (primary, primary_requests, primary_handle) =
             spawn_overpass_server(vec![("503 Service Unavailable", r#"{"elements":[]}"#)]);
         let (secondary, secondary_requests, secondary_handle) =
