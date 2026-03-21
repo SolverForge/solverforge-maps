@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 use super::bbox::BoundingBox;
 use super::network::RoadNetwork;
@@ -15,11 +16,16 @@ use super::network::RoadNetwork;
 pub const CACHE_VERSION: u32 = 5;
 
 static NETWORK_CACHE: OnceLock<RwLock<HashMap<String, RoadNetwork>>> = OnceLock::new();
+static IN_FLIGHT_LOADS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn cache() -> &'static RwLock<HashMap<String, RoadNetwork>> {
     NETWORK_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub(crate) fn in_flight_loads() -> &'static Mutex<HashMap<String, Arc<Mutex<()>>>> {
+    IN_FLIGHT_LOADS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub(crate) fn record_hit() {
