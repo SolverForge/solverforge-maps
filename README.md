@@ -38,12 +38,12 @@ async fn main() -> RoutingResult<()> {
     let bbox = BoundingBox::from_coords(&locations).expand_for_routing(&locations);
     let config = NetworkConfig::default();
 
-let network = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
-let matrix = network.compute_matrix(&locations, None).await;
-let route = network.route(locations[0], locations[1])?; // snaps both points to nearest nodes
+    let network = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
+    let matrix = network.compute_matrix(&locations, None).await;
+    let route = network.route(locations[0], locations[1])?; // snaps both points to nearest nodes
 
-println!("Matrix size: {}", matrix.size());
-println!("Route duration: {} seconds", route.duration_seconds);
+    println!("Matrix size: {}", matrix.size());
+    println!("Route duration: {} seconds", route.duration_seconds);
     Ok(())
 }
 ```
