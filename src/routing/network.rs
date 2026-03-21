@@ -223,6 +223,39 @@ impl RoadNetwork {
         self.distance_lower_bound_between(from, to) / self.max_speed_mps
     }
 
+    fn node_path_geometry(&self, path: &[NodeIdx]) -> Vec<Coord> {
+        path.iter()
+            .filter_map(|&idx| self.graph.node_weight(idx).map(|n| n.coord()))
+            .collect()
+    }
+
+    fn node_path_metrics(&self, path: &[NodeIdx]) -> (f64, f64) {
+        let mut distance = 0.0;
+        let mut time = 0.0;
+
+        for window in path.windows(2) {
+            if let Some(edge) = self.graph.find_edge(window[0], window[1]) {
+                if let Some(weight) = self.graph.edge_weight(edge) {
+                    distance += weight.distance_m;
+                    time += weight.travel_time_s;
+                }
+            }
+        }
+
+        (distance, time)
+    }
+
+    fn route_result_from_node_path(&self, path: &[NodeIdx], duration_seconds: i64) -> RouteResult {
+        let geometry = self.node_path_geometry(path);
+        let (distance, _) = self.node_path_metrics(path);
+
+        RouteResult {
+            duration_seconds,
+            distance_meters: distance,
+            geometry,
+        }
+    }
+
     /// Iterate over all nodes as (lat, lng) pairs.
     pub fn nodes_iter(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
         self.graph
@@ -416,28 +449,17 @@ impl RoadNetwork {
         match best_result {
             Some((total_cost, path)) => {
                 let mut geometry = vec![from.snapped];
-                for &idx in &path {
-                    if let Some(node) = self.graph.node_weight(idx) {
-                        let coord = node.coord();
-                        if geometry.last().copied() != Some(coord) {
-                            geometry.push(coord);
-                        }
+                for coord in self.node_path_geometry(&path) {
+                    if geometry.last().copied() != Some(coord) {
+                        geometry.push(coord);
                     }
                 }
                 if geometry.last().copied() != Some(to.snapped) {
                     geometry.push(to.snapped);
                 }
 
-                let mut distance = start_exit.distance_m;
-                for window in path.windows(2) {
-                    if let Some(edge) = self.graph.find_edge(window[0], window[1]) {
-                        if let Some(weight) = self.graph.edge_weight(edge) {
-                            distance += weight.distance_m;
-                        }
-                    }
-                }
-
-                distance += end_entry.distance_m;
+                let (path_distance, _) = self.node_path_metrics(&path);
+                let distance = start_exit.distance_m + path_distance + end_entry.distance_m;
 
                 Ok(RouteResult {
                     duration_seconds: total_cost.round() as i64,
@@ -478,27 +500,7 @@ impl RoadNetwork {
         );
 
         match result {
-            Some((cost, path)) => {
-                let geometry: Vec<Coord> = path
-                    .iter()
-                    .filter_map(|&idx| self.graph.node_weight(idx).map(|n| n.coord()))
-                    .collect();
-
-                let mut distance = 0.0;
-                for window in path.windows(2) {
-                    if let Some(edge) = self.graph.find_edge(window[0], window[1]) {
-                        if let Some(weight) = self.graph.edge_weight(edge) {
-                            distance += weight.distance_m;
-                        }
-                    }
-                }
-
-                Ok(RouteResult {
-                    duration_seconds: cost.round() as i64,
-                    distance_meters: distance,
-                    geometry,
-                })
-            }
+            Some((cost, path)) => Ok(self.route_result_from_node_path(&path, cost.round() as i64)),
             None => Err(RoutingError::NoPath {
                 from: from.original,
                 to: to.original,
@@ -546,26 +548,11 @@ impl RoadNetwork {
 
         match result {
             Some((_, path)) => {
-                let geometry: Vec<Coord> = path
-                    .iter()
-                    .filter_map(|&idx| self.graph.node_weight(idx).map(|n| n.coord()))
-                    .collect();
-
-                let mut distance = 0.0;
-                let mut time = 0.0;
-                for window in path.windows(2) {
-                    if let Some(edge) = self.graph.find_edge(window[0], window[1]) {
-                        if let Some(weight) = self.graph.edge_weight(edge) {
-                            distance += weight.distance_m;
-                            time += weight.travel_time_s;
-                        }
-                    }
-                }
-
+                let (distance, time) = self.node_path_metrics(&path);
                 Ok(RouteResult {
                     duration_seconds: time.round() as i64,
                     distance_meters: distance,
-                    geometry,
+                    geometry: self.node_path_geometry(&path),
                 })
             }
             None => Err(RoutingError::NoPath { from, to }),
