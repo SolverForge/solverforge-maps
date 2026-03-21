@@ -2,7 +2,7 @@
 
 use rayon::prelude::*;
 use std::collections::HashMap;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{self, Sender};
 
 use super::algo::dijkstra;
 use super::coord::Coord;
@@ -195,8 +195,29 @@ impl RoadNetwork {
             })
             .collect();
 
+        let row_progress = progress.map(|tx| {
+            let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<usize>();
+            let tx = tx.clone();
+            let handle = tokio::spawn(async move {
+                let mut completed_rows = 0usize;
+                while progress_rx.recv().await.is_some() {
+                    completed_rows += 1;
+                    let percent = 55 + ((completed_rows * 44) / n.max(1)) as u8;
+                    let _ = tx
+                        .send(RoutingProgress::ComputingMatrix {
+                            percent,
+                            row: completed_rows,
+                            total: n,
+                        })
+                        .await;
+                }
+            });
+            (progress_tx, handle)
+        });
+
         // Compute rows in parallel via rayon - each row runs Dijkstra from source endpoints
         let graph = &self.graph;
+        let progress_tx = row_progress.as_ref().map(|(tx, _)| tx.clone());
         let rows: Vec<Vec<i64>> = (0..n)
             .into_par_iter()
             .map(|i| {
@@ -207,6 +228,9 @@ impl RoadNetwork {
                         if i != j {
                             *cell = UNREACHABLE;
                         }
+                    }
+                    if let Some(tx) = &progress_tx {
+                        let _ = tx.send(i);
                     }
                     return row;
                 };
@@ -230,18 +254,20 @@ impl RoadNetwork {
                     };
                 }
 
+                if let Some(tx) = &progress_tx {
+                    let _ = tx.send(i);
+                }
                 row
             })
             .collect();
 
+        if let Some((progress_tx, handle)) = row_progress {
+            drop(progress_tx);
+            let _ = handle.await;
+        }
+
         if let Some(tx) = progress {
-            let _ = tx
-                .send(RoutingProgress::ComputingMatrix {
-                    percent: 80,
-                    row: n,
-                    total: n,
-                })
-                .await;
+            let _ = tx.send(RoutingProgress::Complete).await;
         }
 
         let data: Vec<i64> = rows.into_iter().flatten().collect();
@@ -281,6 +307,10 @@ impl RoadNetwork {
                     }
                 }
             }
+        }
+
+        if let Some(tx) = progress {
+            let _ = tx.send(RoutingProgress::Complete).await;
         }
 
         geometries

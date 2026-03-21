@@ -418,6 +418,9 @@ tokio::spawn(async move {
             RoutingProgress::ComputingMatrix { percent, row, total } => {
                 println!("[{:3}%] Computing matrix row {}/{}", percent, row, total);
             }
+            RoutingProgress::Complete => {
+                println!("[100%] Done");
+            }
             _ => {}
         }
     }
@@ -437,7 +440,6 @@ let matrix = network.compute_matrix(&locations, Some(&tx)).await;
 | `BuildingGraph { percent }` | Building routing graph |
 | `ComputingMatrix { percent, row, total }` | Computing travel time matrix |
 | `ComputingGeometries { percent, pair, total }` | Computing route geometries |
-| `EncodingGeometries { percent }` | Encoding geometries to polylines |
 | `Complete` | Operation finished |
 
 ---

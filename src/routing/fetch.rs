@@ -191,6 +191,7 @@ out body;"#,
             let _ = tx
                 .send(RoutingProgress::BuildingGraph { percent: 50 })
                 .await;
+            let _ = tx.send(RoutingProgress::Complete).await;
         }
 
         Ok(network)
@@ -555,13 +556,6 @@ fn is_retryable_status(status: reqwest::StatusCode) -> bool {
 
 fn is_retryable_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request()
-}
-
-impl RoadNetwork {
-    #[doc(hidden)]
-    pub async fn load_or_fetch_simple(bbox: &BoundingBox) -> Result<NetworkRef, RoutingError> {
-        Self::load_or_fetch(bbox, &NetworkConfig::default(), None).await
-    }
 }
 
 async fn acquire_in_flight_slot(cache_key: &str) -> (Arc<Mutex<()>>, OwnedMutexGuard<()>) {
