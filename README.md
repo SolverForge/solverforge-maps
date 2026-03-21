@@ -5,10 +5,10 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 ## Features
 
 - **OSM Road Network**: Download and cache OpenStreetMap road data via Overpass API
-- **R-Tree Spatial Indexing**: O(log n) coordinate snapping to road network
-- **Shortest Path Routing**: Dijkstra/A* routing with travel times and distances
+- **K-D Tree Spatial Indexing**: Nearest-node and nearest-segment snapping on the road network
+- **Shortest Path Routing**: Dijkstra-style shortest paths for time and distance objectives
 - **Travel Time Matrix**: Compute all-pairs travel times with parallel computation
-- **Route Geometry**: Full road-following geometries with Douglas-Peucker simplification
+- **Route Geometry**: Node-snapped and edge-snapped route geometries with Douglas-Peucker simplification
 - **Polyline Encoding**: Google Polyline Algorithm for efficient route transmission
 - **Input Validation**: Fail-fast coordinate and bounding box validation
 - **Cache Management**: In-memory and file-based caching with inspection and eviction
@@ -38,12 +38,12 @@ async fn main() -> RoutingResult<()> {
     let bbox = BoundingBox::from_coords(&locations).expand_for_routing(&locations);
     let config = NetworkConfig::default();
 
-    let network = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
-    let matrix = network.compute_matrix(&locations, None).await;
-    let route = network.route(locations[0], locations[1])?;
+let network = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
+let matrix = network.compute_matrix(&locations, None).await;
+let route = network.route(locations[0], locations[1])?; // snaps both points to nearest nodes
 
-    println!("Matrix size: {}", matrix.size());
-    println!("Route duration: {} seconds", route.duration_seconds);
+println!("Matrix size: {}", matrix.size());
+println!("Route duration: {} seconds", route.duration_seconds);
     Ok(())
 }
 ```
@@ -212,16 +212,22 @@ let network: RoadNetwork = RoadNetwork::fetch(&bbox, &config, None).await?;
 
 #### Routing
 
+`route` and `route_with` snap both endpoints to the nearest graph nodes before
+searching. They currently call the shared `astar` implementation with a zero
+heuristic, so the public search behavior is equivalent to Dijkstra's algorithm.
+If you need geometry that starts and ends on the containing road segments rather
+than at snapped nodes, use `snap_to_edge` with `route_edge_snapped`.
+
 ```rust
-use solverforge_maps::{Coord, RouteResult, RoutingError, Objective};
+use solverforge_maps::{Coord, Objective, RouteResult, RoutingError};
 
 let from = Coord::new(39.95, -75.16);
 let to = Coord::new(39.96, -75.17);
 
-// Route by minimum travel time (default)
+// Route by minimum travel time (default). Endpoints are snapped to nearest nodes.
 let route: Result<RouteResult, RoutingError> = network.route(from, to);
 
-// Route with specific objective
+// Route with specific objective. Public search still uses a zero heuristic today.
 let route = network.route_with(from, to, Objective::Time)?;     // Minimize time
 let route = network.route_with(from, to, Objective::Distance)?; // Minimize distance
 
@@ -232,6 +238,22 @@ println!("Geometry: {} points", route.geometry.len());
 
 // Simplify geometry for transmission (Douglas-Peucker algorithm)
 let simplified = route.simplify(10.0);  // tolerance in meters
+```
+
+#### Edge-Snapped Routing
+
+Use edge snapping when you want the returned geometry to begin and end on the
+nearest road segments instead of the nearest graph nodes.
+
+```rust
+use solverforge_maps::{Coord, RouteResult, RoutingError};
+
+let from = Coord::new(39.95, -75.16);
+let to = Coord::new(39.96, -75.17);
+
+let from_edge = network.snap_to_edge(from)?;
+let to_edge = network.snap_to_edge(to)?;
+let route: Result<RouteResult, RoutingError> = network.route_edge_snapped(&from_edge, &to_edge);
 ```
 
 #### Coordinate Snapping
@@ -253,7 +275,7 @@ if let Ok(snap) = snapped {
     println!("Snap distance: {:.1} meters", snap.snap_distance_m);
 }
 
-// Route between pre-snapped coordinates (more efficient for repeated routing)
+// Route between pre-snapped node locations (more efficient for repeated routing)
 let from_snap = network.snap_to_road_detailed(from)?;
 let to_snap = network.snap_to_road_detailed(to)?;
 let route = network.route_snapped(&from_snap, &to_snap)?;
