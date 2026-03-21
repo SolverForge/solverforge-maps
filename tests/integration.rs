@@ -321,4 +321,27 @@ mod matrix {
         assert!(matrix.row(1).is_none());
         assert!(matrix.locations().len() == 1);
     }
+
+    #[tokio::test]
+    async fn matrix_matches_single_route_node_snapping() {
+        let nodes = &[(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)];
+        let edges = &[
+            (0, 1, 100.0, 1000.0),
+            (1, 0, 100.0, 1000.0),
+            (1, 2, 100.0, 1000.0),
+            (2, 1, 100.0, 1000.0),
+        ];
+        let network = RoadNetwork::from_test_data(nodes, edges);
+
+        let start = Coord::new(0.0, 0.4);
+        let end = Coord::new(0.0, 1.6);
+        let locations = vec![start, end];
+
+        let matrix = network.compute_matrix(&locations, None).await;
+        let route = network.route(start, end).expect("Failed to compute route");
+
+        assert_eq!(matrix.get(0, 1), Some(route.duration_seconds));
+        assert_eq!(matrix.locations()[0].snapped, Coord::new(0.0, 0.0));
+        assert_eq!(matrix.locations()[1].snapped, Coord::new(0.0, 2.0));
+    }
 }

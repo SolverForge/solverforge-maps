@@ -7,7 +7,7 @@ use tokio::sync::mpsc::Sender;
 use super::algo::dijkstra;
 use super::coord::Coord;
 use super::graph::NodeIdx;
-use super::network::{EdgeSnappedLocation, RoadNetwork, SnappedCoord};
+use super::network::{RoadNetwork, SnappedCoord};
 use super::progress::RoutingProgress;
 
 pub const UNREACHABLE: i64 = i64::MAX;
@@ -173,22 +173,17 @@ impl RoadNetwork {
             return TravelTimeMatrix::new(vec![], 0, vec![]);
         }
 
-        let edge_snapped: Vec<Option<EdgeSnappedLocation>> = locations
+        let node_snapped: Vec<Option<SnappedCoord>> = locations
             .iter()
-            .map(|&coord| self.snap_to_edge(coord).ok())
+            .map(|&coord| self.snap_to_road_detailed(coord).ok())
             .collect();
 
-        let snapped: Vec<SnappedCoord> = locations
+        let snapped_locations: Vec<SnappedCoord> = locations
             .iter()
-            .zip(edge_snapped.iter())
+            .zip(node_snapped.iter())
             .map(|(&coord, edge_snap)| {
-                if let Some(es) = edge_snap {
-                    SnappedCoord {
-                        original: coord,
-                        snapped: es.snapped,
-                        snap_distance_m: es.snap_distance_m,
-                        node_index: es.from_node,
-                    }
+                if let Some(snapped) = edge_snap {
+                    *snapped
                 } else {
                     SnappedCoord {
                         original: coord,
@@ -207,7 +202,7 @@ impl RoadNetwork {
             .map(|i| {
                 let mut row = vec![0i64; n];
 
-                let Some(from) = &edge_snapped[i] else {
+                let Some(from) = &node_snapped[i] else {
                     for (j, cell) in row.iter_mut().enumerate() {
                         if i != j {
                             *cell = UNREACHABLE;
@@ -216,66 +211,22 @@ impl RoadNetwork {
                     return row;
                 };
 
-                let from_edge = match graph.edge_weight(from.edge_index) {
-                    Some(e) => e,
-                    None => {
-                        for (j, cell) in row.iter_mut().enumerate() {
-                            if i != j {
-                                *cell = UNREACHABLE;
-                            }
-                        }
-                        return row;
-                    }
-                };
-
-                // Run Dijkstra from both endpoints of source edge to all nodes
-                let costs_a = dijkstra(graph, from.from_node, None, |e| e.travel_time_s);
-                let costs_b = dijkstra(graph, from.to_node, None, |e| e.travel_time_s);
-
-                // Offset from snap point to each endpoint
-                let off_a = from_edge.travel_time_s * from.position;
-                let off_b = from_edge.travel_time_s * (1.0 - from.position);
+                let costs = dijkstra(graph, from.node_index, None, |e| e.travel_time_s);
 
                 for j in 0..n {
                     if i == j {
                         continue;
                     }
 
-                    let Some(to) = &edge_snapped[j] else {
+                    let Some(to) = &node_snapped[j] else {
                         row[j] = UNREACHABLE;
                         continue;
                     };
 
-                    let to_edge = match graph.edge_weight(to.edge_index) {
-                        Some(e) => e,
-                        None => {
-                            row[j] = UNREACHABLE;
-                            continue;
-                        }
-                    };
-
-                    let to_off_a = to_edge.travel_time_s * to.position;
-                    let to_off_b = to_edge.travel_time_s * (1.0 - to.position);
-
-                    // Best of 4 combinations: (from endpoint) -> (to endpoint)
-                    let mut best = f64::MAX;
-                    if let Some(&c) = costs_a.get(&to.from_node) {
-                        best = best.min(off_a + c + to_off_a);
-                    }
-                    if let Some(&c) = costs_a.get(&to.to_node) {
-                        best = best.min(off_a + c + to_off_b);
-                    }
-                    if let Some(&c) = costs_b.get(&to.from_node) {
-                        best = best.min(off_b + c + to_off_a);
-                    }
-                    if let Some(&c) = costs_b.get(&to.to_node) {
-                        best = best.min(off_b + c + to_off_b);
-                    }
-
-                    row[j] = if best == f64::MAX {
-                        UNREACHABLE
-                    } else {
+                    row[j] = if let Some(&best) = costs.get(&to.node_index) {
                         best.round() as i64
+                    } else {
+                        UNREACHABLE
                     };
                 }
 
@@ -294,7 +245,7 @@ impl RoadNetwork {
         }
 
         let data: Vec<i64> = rows.into_iter().flatten().collect();
-        TravelTimeMatrix::new(data, n, snapped)
+        TravelTimeMatrix::new(data, n, snapped_locations)
     }
 
     pub async fn compute_geometries(
