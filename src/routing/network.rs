@@ -298,8 +298,10 @@ impl RoadNetwork {
 
     /// Find a route between two coordinates.
     ///
-    /// This method snaps the coordinates to the nearest road network nodes
-    /// and then finds the shortest path by travel time.
+    /// This method snaps both coordinates to the nearest road-network nodes,
+    /// then runs the public travel-time search over those snapped nodes.
+    /// The current implementation passes a zero heuristic to `astar`, so its
+    /// behavior is equivalent to Dijkstra's algorithm.
     pub fn route(&self, from: Coord, to: Coord) -> Result<RouteResult, RoutingError> {
         let start_snap = self.snap_to_road_detailed(from)?;
         let end_snap = self.snap_to_road_detailed(to)?;
@@ -309,8 +311,8 @@ impl RoadNetwork {
 
     /// Find a route between two edge-snapped locations.
     ///
-    /// This handles the case where start and end are on road segments,
-    /// not necessarily at intersections.
+    /// Use this when start and end should stay on their containing road
+    /// segments instead of being snapped all the way to graph nodes.
     pub fn route_edge_snapped(
         &self,
         from: &EdgeSnappedLocation,
@@ -424,6 +426,10 @@ impl RoadNetwork {
         }
     }
 
+    /// Find a route between two node-snapped coordinates.
+    ///
+    /// This expects `SnappedCoord` values produced by `snap_to_road_detailed`
+    /// and returns geometry along graph nodes, not projected edge endpoints.
     pub fn route_snapped(
         &self,
         from: &SnappedCoord,
@@ -474,6 +480,10 @@ impl RoadNetwork {
         }
     }
 
+    /// Find a route between two coordinates with an explicit optimization objective.
+    ///
+    /// Like `route`, this method snaps to the nearest graph nodes first. The
+    /// current public search still uses a zero heuristic for both objectives.
     pub fn route_with(
         &self,
         from: Coord,
