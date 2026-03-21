@@ -97,6 +97,7 @@ pub struct RoadNetwork {
     pub(super) coord_to_node: HashMap<(i64, i64), NodeIdx>,
     spatial_index: Option<KdTree<SpatialPoint>>,
     edge_spatial_index: Option<SegmentIndex<SpatialSegment>>,
+    max_speed_mps: f64,
 }
 
 impl RoadNetwork {
@@ -106,6 +107,7 @@ impl RoadNetwork {
             coord_to_node: HashMap::new(),
             spatial_index: None,
             edge_spatial_index: None,
+            max_speed_mps: 0.0,
         }
     }
 
@@ -128,6 +130,7 @@ impl RoadNetwork {
     }
 
     pub(super) fn add_edge(&mut self, from: NodeIdx, to: NodeIdx, data: EdgeData) {
+        self.record_edge_speed(&data);
         self.graph.add_edge(from, to, data);
     }
 
@@ -140,14 +143,12 @@ impl RoadNetwork {
     ) {
         let from_idx = NodeIdx::new(from);
         let to_idx = NodeIdx::new(to);
-        self.graph.add_edge(
-            from_idx,
-            to_idx,
-            EdgeData {
-                travel_time_s,
-                distance_m,
-            },
-        );
+        let data = EdgeData {
+            travel_time_s,
+            distance_m,
+        };
+        self.record_edge_speed(&data);
+        self.graph.add_edge(from_idx, to_idx, data);
     }
 
     pub(super) fn build_spatial_index(&mut self) {
@@ -191,6 +192,35 @@ impl RoadNetwork {
             .collect();
 
         self.edge_spatial_index = Some(SegmentIndex::bulk_load(segments));
+    }
+
+    fn record_edge_speed(&mut self, edge: &EdgeData) {
+        if edge.travel_time_s <= 0.0 || edge.distance_m <= 0.0 {
+            return;
+        }
+
+        let speed_mps = edge.distance_m / edge.travel_time_s;
+        if speed_mps.is_finite() {
+            self.max_speed_mps = self.max_speed_mps.max(speed_mps);
+        }
+    }
+
+    fn distance_lower_bound_between(&self, from: NodeIdx, to: NodeIdx) -> f64 {
+        let Some(from_node) = self.graph.node_weight(from) else {
+            return 0.0;
+        };
+        let Some(to_node) = self.graph.node_weight(to) else {
+            return 0.0;
+        };
+        haversine_distance(from_node.coord(), to_node.coord())
+    }
+
+    fn time_lower_bound_between(&self, from: NodeIdx, to: NodeIdx) -> f64 {
+        if !self.max_speed_mps.is_finite() || self.max_speed_mps <= 0.0 {
+            return 0.0;
+        }
+
+        self.distance_lower_bound_between(from, to) / self.max_speed_mps
     }
 
     /// Iterate over all nodes as (lat, lng) pairs.
@@ -378,7 +408,7 @@ impl RoadNetwork {
                 start_exit.node,
                 |n| n == end_entry.node,
                 |e| e.travel_time_s,
-                |_| 0.0,
+                |n| self.time_lower_bound_between(n, end_entry.node),
             )
             .map(|(path_cost, path)| (start_exit.time_s + path_cost + end_entry.time_s, path))
         };
@@ -444,7 +474,7 @@ impl RoadNetwork {
             from.node_index,
             |n| n == to.node_index,
             |e| e.travel_time_s,
-            |_| 0.0,
+            |n| self.time_lower_bound_between(n, to.node_index),
         );
 
         match result {
@@ -478,8 +508,8 @@ impl RoadNetwork {
 
     /// Find a route between two coordinates with an explicit optimization objective.
     ///
-    /// Like `route`, this method snaps to the nearest graph nodes first. The
-    /// current public search still uses a zero heuristic for both objectives.
+    /// Like `route`, this method snaps to the nearest graph nodes first and
+    /// uses admissible straight-line lower bounds for both objectives.
     pub fn route_with(
         &self,
         from: Coord,
@@ -503,14 +533,14 @@ impl RoadNetwork {
                 start_snap.node_index,
                 |n| n == end_snap.node_index,
                 |e| e.travel_time_s,
-                |_| 0.0,
+                |n| self.time_lower_bound_between(n, end_snap.node_index),
             ),
             Objective::Distance => astar(
                 &self.graph,
                 start_snap.node_index,
                 |n| n == end_snap.node_index,
                 |e| e.distance_m,
-                |_| 0.0,
+                |n| self.distance_lower_bound_between(n, end_snap.node_index),
             ),
         };
 
@@ -646,6 +676,80 @@ impl RoadNetwork {
         network.build_spatial_index();
 
         network
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NodeIdx, Objective, RoadNetwork};
+    use crate::routing::Coord;
+
+    #[test]
+    fn time_routing_uses_non_zero_admissible_heuristic() {
+        let nodes = &[(0.0, 0.0), (0.0, 0.01), (0.01, 0.0), (0.01, 0.01)];
+        let edges = &[
+            (0, 1, 200.0, 1_200.0),
+            (1, 3, 200.0, 1_200.0),
+            (0, 2, 50.0, 1_200.0),
+            (2, 3, 50.0, 1_200.0),
+            (1, 0, 200.0, 1_200.0),
+            (3, 1, 200.0, 1_200.0),
+            (2, 0, 50.0, 1_200.0),
+            (3, 2, 50.0, 1_200.0),
+        ];
+        let network = RoadNetwork::from_test_data(nodes, edges);
+
+        let result = network
+            .route(Coord::new(0.0, 0.0), Coord::new(0.01, 0.01))
+            .expect("time route should exist");
+
+        assert_eq!(result.duration_seconds, 100);
+        assert_eq!(result.distance_meters, 2_400.0);
+        assert_eq!(
+            result.geometry,
+            vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(0.01, 0.0),
+                Coord::new(0.01, 0.01),
+            ]
+        );
+        assert!(network.time_lower_bound_between(NodeIdx(0), NodeIdx(3)) > 0.0);
+    }
+
+    #[test]
+    fn distance_routing_uses_non_zero_admissible_heuristic() {
+        let nodes = &[(0.0, 0.0), (0.0, 0.02), (0.01, 0.0), (0.01, 0.02)];
+        let edges = &[
+            (0, 1, 40.0, 3_000.0),
+            (1, 3, 40.0, 3_000.0),
+            (0, 2, 90.0, 900.0),
+            (2, 3, 90.0, 900.0),
+            (1, 0, 40.0, 3_000.0),
+            (3, 1, 40.0, 3_000.0),
+            (2, 0, 90.0, 900.0),
+            (3, 2, 90.0, 900.0),
+        ];
+        let network = RoadNetwork::from_test_data(nodes, edges);
+
+        let result = network
+            .route_with(
+                Coord::new(0.0, 0.0),
+                Coord::new(0.01, 0.02),
+                Objective::Distance,
+            )
+            .expect("distance route should exist");
+
+        assert_eq!(result.distance_meters, 1_800.0);
+        assert_eq!(result.duration_seconds, 180);
+        assert_eq!(
+            result.geometry,
+            vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(0.01, 0.0),
+                Coord::new(0.01, 0.02),
+            ]
+        );
+        assert!(network.distance_lower_bound_between(NodeIdx(0), NodeIdx(3)) > 0.0);
     }
 }
 
