@@ -381,7 +381,11 @@ println!("Cached networks: {}", stats.networks_cached);
 println!("Total nodes: {}", stats.total_nodes);
 println!("Total edges: {}", stats.total_edges);
 println!("Memory: {} bytes", stats.memory_bytes);
-println!("Hits: {}, Misses: {}", stats.hits, stats.misses);
+println!("Load requests: {}", stats.load_requests);
+println!("Memory hits: {}", stats.memory_hits);
+println!("Disk hits: {}", stats.disk_hits);
+println!("Network fetches: {}", stats.network_fetches);
+println!("In-flight waits: {}", stats.in_flight_waits);
 
 // List cached regions
 let regions: Vec<BoundingBox> = RoadNetwork::cached_regions().await;

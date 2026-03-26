@@ -1,15 +1,29 @@
-//! Opt-in live integration tests for solverforge-maps.
+//! Live integration tests for solverforge-maps.
 //!
 //! These tests hit public network services and mutable upstream map data.
-//! Run them explicitly with:
-//!
-//! `cargo test --test live_integration -- --ignored`
+//! They are enabled only when `SOLVERFORGE_RUN_LIVE_TESTS=1` is set.
 
 use serde::Deserialize;
 use solverforge_maps::{
     decode_polyline, haversine_distance, BoundingBox, Coord, NetworkConfig, RoadNetwork,
 };
-use textplots::{Chart, Plot, Shape};
+
+const LIVE_TESTS_ENV: &str = "SOLVERFORGE_RUN_LIVE_TESTS";
+
+fn live_tests_enabled() -> bool {
+    std::env::var(LIVE_TESTS_ENV).is_ok_and(|value| value == "1")
+}
+
+fn require_live_tests() -> bool {
+    if live_tests_enabled() {
+        true
+    } else {
+        eprintln!(
+            "live integration tests disabled; set {LIVE_TESTS_ENV}=1 to run external-service checks"
+        );
+        false
+    }
+}
 
 fn philadelphia_bbox() -> BoundingBox {
     BoundingBox::new(39.946, -75.174, 39.962, -75.150)
@@ -32,8 +46,11 @@ mod verification {
 
     /// Verify every point in the route geometry is within a small tolerance of a network node.
     #[tokio::test]
-    #[ignore = "requires live Overpass data"]
     async fn geometry_points_lie_on_network() {
+        if !require_live_tests() {
+            return;
+        }
+
         let bbox = philadelphia_bbox();
         let config = NetworkConfig::default();
 
@@ -68,8 +85,11 @@ mod verification {
 
     /// Use a known straight road segment where distance is predictable.
     #[tokio::test]
-    #[ignore = "requires live Overpass data"]
     async fn known_straight_segment() {
+        if !require_live_tests() {
+            return;
+        }
+
         let bbox = philadelphia_bbox();
         let config = NetworkConfig::default();
 
@@ -101,8 +121,11 @@ mod verification {
 
     /// Verify that routing from A to B actually reaches B.
     #[tokio::test]
-    #[ignore = "requires live Overpass data"]
     async fn roundtrip_snap_route_reaches_destination() {
+        if !require_live_tests() {
+            return;
+        }
+
         let bbox = philadelphia_bbox();
         let config = NetworkConfig::default();
 
@@ -159,8 +182,11 @@ mod verification {
 
     /// Multiple sanity assertions: distance bounds, speed range, geometry continuity.
     #[tokio::test]
-    #[ignore = "requires live Overpass data"]
     async fn route_sanity_checks() {
+        if !require_live_tests() {
+            return;
+        }
+
         let bbox = philadelphia_bbox();
         let config = NetworkConfig::default();
 
@@ -256,8 +282,11 @@ mod osrm_comparison {
     }
 
     #[tokio::test]
-    #[ignore = "requires live Overpass and OSRM services"]
     async fn distance_matches_osrm() {
+        if !require_live_tests() {
+            return;
+        }
+
         let bbox = philadelphia_bbox();
         let config = NetworkConfig::default();
 
@@ -288,8 +317,11 @@ mod osrm_comparison {
     }
 
     #[tokio::test]
-    #[ignore = "requires live Overpass and OSRM services"]
     async fn duration_matches_osrm() {
+        if !require_live_tests() {
+            return;
+        }
+
         let bbox = philadelphia_bbox();
         let config = NetworkConfig::default();
 
@@ -320,8 +352,11 @@ mod osrm_comparison {
     }
 
     #[tokio::test]
-    #[ignore = "requires live Overpass and OSRM services"]
     async fn geometry_similar_to_osrm() {
+        if !require_live_tests() {
+            return;
+        }
+
         let bbox = philadelphia_bbox();
         let config = NetworkConfig::default();
 
@@ -359,94 +394,6 @@ mod osrm_comparison {
                 min_distance,
                 max_deviation_m
             );
-        }
-    }
-}
-
-mod visual {
-    use super::*;
-
-    struct Location {
-        name: &'static str,
-        bbox: BoundingBox,
-    }
-
-    fn locations() -> Vec<Location> {
-        vec![
-            Location {
-                name: "Philadelphia (City Hall area)",
-                bbox: philadelphia_bbox(),
-            },
-            Location {
-                name: "Dragoncello (Poggio Rusco, IT)",
-                bbox: BoundingBox::new(44.978, 11.095, 44.986, 11.108),
-            },
-            Location {
-                name: "Clusone (Lombardy, IT)",
-                bbox: BoundingBox::new(45.882, 9.940, 45.895, 9.960),
-            },
-        ]
-    }
-
-    fn plot_network(name: &str, network: &RoadNetwork, bbox: &BoundingBox) {
-        let nodes: Vec<(f64, f64)> = network.nodes_iter().collect();
-        let edges: Vec<(usize, usize, f64, f64)> = network.edges_iter().collect();
-
-        if nodes.is_empty() {
-            println!("\n{}: No data", name);
-            return;
-        }
-
-        let mut segments: Vec<(f32, f32)> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for &(from, to, _, _) in &edges {
-            let key = (from.min(to), from.max(to));
-            if seen.insert(key) && from < nodes.len() && to < nodes.len() {
-                let (lat1, lng1) = nodes[from];
-                let (lat2, lng2) = nodes[to];
-                segments.push((lng1 as f32, lat1 as f32));
-                segments.push((lng2 as f32, lat2 as f32));
-                segments.push((f32::NAN, f32::NAN));
-            }
-        }
-
-        let intersections: Vec<(f32, f32)> = nodes
-            .iter()
-            .map(|(lat, lng)| (*lng as f32, *lat as f32))
-            .collect();
-
-        println!("\n{}", name);
-        println!(
-            "{} nodes, {} edges",
-            network.node_count(),
-            network.edge_count()
-        );
-
-        let x_min = bbox.min_lng as f32;
-        let x_max = bbox.max_lng as f32;
-
-        Chart::new(180, 60, x_min, x_max)
-            .lineplot(&Shape::Lines(&segments))
-            .lineplot(&Shape::Points(&intersections))
-            .nice();
-    }
-
-    #[tokio::test]
-    #[ignore = "requires live Overpass data"]
-    async fn road_network_visualization() {
-        let config = NetworkConfig::default();
-
-        for loc in locations() {
-            print!("\nFetching {}...", loc.name);
-            match RoadNetwork::load_or_fetch(&loc.bbox, &config, None).await {
-                Ok(network_ref) => {
-                    println!(" done");
-                    plot_network(loc.name, &network_ref, &loc.bbox);
-                }
-                Err(e) => {
-                    println!(" failed: {}", e);
-                }
-            }
         }
     }
 }

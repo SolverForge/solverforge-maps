@@ -12,8 +12,9 @@ use tracing::{debug, info};
 
 use super::bbox::BoundingBox;
 use super::cache::{
-    cache, in_flight_loads, record_hit, record_miss, CachedEdge, CachedNetwork, CachedNode,
-    NetworkRef, CACHE_VERSION,
+    cache, in_flight_loads, record_disk_hit, record_in_flight_wait, record_load_request,
+    record_memory_hit, record_network_fetch, CachedEdge, CachedNetwork, CachedNode, NetworkRef,
+    CACHE_VERSION,
 };
 use super::config::{ConnectivityPolicy, NetworkConfig};
 use super::coord::Coord;
@@ -29,6 +30,7 @@ impl RoadNetwork {
         progress: Option<&Sender<RoutingProgress>>,
     ) -> Result<NetworkRef, RoutingError> {
         let cache_key = bbox.cache_key();
+        record_load_request();
 
         if let Some(tx) = progress {
             let _ = tx.send(RoutingProgress::CheckingCache { percent: 0 }).await;
@@ -37,7 +39,7 @@ impl RoadNetwork {
         {
             let cache_guard = cache().read().await;
             if cache_guard.contains_key(&cache_key) {
-                record_hit();
+                record_memory_hit();
                 info!("Using in-memory cached road network for {}", cache_key);
                 if let Some(tx) = progress {
                     let _ = tx
@@ -47,8 +49,6 @@ impl RoadNetwork {
                 return Ok(NetworkRef::new(cache_guard, cache_key));
             }
         }
-        record_miss();
-
         if let Some(tx) = progress {
             let _ = tx.send(RoutingProgress::CheckingCache { percent: 5 }).await;
         }
@@ -64,6 +64,7 @@ impl RoadNetwork {
                 }
                 match Self::load_from_file(&cache_path, config).await {
                     Ok(network) => {
+                        record_disk_hit();
                         if let Some(tx) = progress {
                             let _ = tx
                                 .send(RoutingProgress::BuildingGraph { percent: 50 })
@@ -77,6 +78,7 @@ impl RoadNetwork {
                 info!("Downloading road network from Overpass API");
             }
 
+            record_network_fetch();
             let network = Self::fetch_from_api(bbox, config, progress).await?;
             network.save_to_file(&cache_path).await?;
             info!("Saved road network to file cache: {:?}", cache_path);
@@ -405,9 +407,10 @@ out body;"#,
             return Ok(cached);
         }
 
-        record_miss();
-
-        let (slot, _slot_guard) = acquire_in_flight_slot(&cache_key).await;
+        let (slot, _slot_guard, waited) = acquire_in_flight_slot(&cache_key).await;
+        if waited {
+            record_in_flight_wait();
+        }
 
         if let Some(cached) = Self::get_cached_network(cache_key.clone()).await {
             cleanup_in_flight_slot(&cache_key, &slot).await;
@@ -431,7 +434,6 @@ out body;"#,
     async fn get_cached_network(cache_key: String) -> Option<NetworkRef> {
         let cache_guard = cache().read().await;
         if cache_guard.contains_key(&cache_key) {
-            record_hit();
             Some(NetworkRef::new(cache_guard, cache_key))
         } else {
             None
@@ -558,17 +560,26 @@ fn is_retryable_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request()
 }
 
-async fn acquire_in_flight_slot(cache_key: &str) -> (Arc<Mutex<()>>, OwnedMutexGuard<()>) {
+async fn acquire_in_flight_slot(cache_key: &str) -> (Arc<Mutex<()>>, OwnedMutexGuard<()>, bool) {
     let slot = {
         let mut in_flight = in_flight_loads().lock().await;
-        in_flight
-            .entry(cache_key.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+        match in_flight.get(cache_key) {
+            Some(slot) => slot.clone(),
+            None => {
+                let slot = Arc::new(Mutex::new(()));
+                in_flight.insert(cache_key.to_string(), slot.clone());
+                slot
+            }
+        }
     };
 
-    let guard = slot.clone().lock_owned().await;
-    (slot, guard)
+    match slot.clone().try_lock_owned() {
+        Ok(guard) => (slot, guard, false),
+        Err(_) => {
+            let guard = slot.clone().lock_owned().await;
+            (slot, guard, true)
+        }
+    }
 }
 
 async fn cleanup_in_flight_slot(cache_key: &str, slot: &Arc<Mutex<()>>) {
@@ -591,12 +602,13 @@ mod tests {
     use std::sync::Arc;
     use std::sync::OnceLock;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use tokio::sync::Mutex;
     use tokio::time::sleep;
 
     use super::*;
+    use crate::routing::cache::{reset_cache_metrics, CacheStats};
     use crate::routing::BoundingBox;
 
     static FETCH_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -612,6 +624,28 @@ mod tests {
     async fn reset_test_state() {
         RoadNetwork::clear_cache().await;
         in_flight_loads().lock().await.clear();
+        reset_cache_metrics();
+    }
+
+    fn unique_cache_dir(prefix: &str) -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "solverforge-maps-{prefix}-{}-{suffix}",
+            std::process::id()
+        ))
+    }
+
+    async fn assert_cache_stats(expected: CacheStats) {
+        let stats = RoadNetwork::cache_stats().await;
+        assert_eq!(stats.networks_cached, expected.networks_cached);
+        assert_eq!(stats.load_requests, expected.load_requests);
+        assert_eq!(stats.memory_hits, expected.memory_hits);
+        assert_eq!(stats.disk_hits, expected.disk_hits);
+        assert_eq!(stats.network_fetches, expected.network_fetches);
+        assert_eq!(stats.in_flight_waits, expected.in_flight_waits);
     }
 
     #[tokio::test]
@@ -683,6 +717,190 @@ mod tests {
         right.expect("second load should succeed");
 
         assert_eq!(loads.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn load_or_fetch_records_network_then_memory_hit() {
+        let _guard = fetch_test_lock().lock().await;
+        reset_test_state().await;
+
+        let bbox = BoundingBox::new(39.95, -75.17, 39.96, -75.16);
+        let cache_dir = unique_cache_dir("network-memory");
+        let (endpoint, requests, handle) =
+            spawn_overpass_server(vec![("200 OK", overpass_fixture_json())]);
+        let config = NetworkConfig::new()
+            .overpass_endpoints(vec![endpoint])
+            .cache_dir(&cache_dir)
+            .overpass_max_retries(0);
+
+        let first = RoadNetwork::load_or_fetch(&bbox, &config, None).await;
+        assert!(first.is_ok(), "first load should succeed");
+        let second = RoadNetwork::load_or_fetch(&bbox, &config, None).await;
+        assert!(second.is_ok(), "second load should hit memory cache");
+
+        handle.join().expect("server thread should finish");
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+
+        assert_cache_stats(CacheStats {
+            networks_cached: 1,
+            total_nodes: 0,
+            total_edges: 0,
+            memory_bytes: 0,
+            load_requests: 2,
+            memory_hits: 1,
+            disk_hits: 0,
+            network_fetches: 1,
+            in_flight_waits: 0,
+        })
+        .await;
+
+        let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn load_or_fetch_records_disk_hit_without_network_fetch() {
+        let _guard = fetch_test_lock().lock().await;
+        reset_test_state().await;
+
+        let bbox = BoundingBox::new(39.95, -75.17, 39.96, -75.16);
+        let cache_dir = unique_cache_dir("disk-hit");
+        tokio::fs::create_dir_all(&cache_dir)
+            .await
+            .expect("cache dir should be created");
+        let cache_path = cache_dir.join(format!("{}.json", bbox.cache_key()));
+        let cached = CachedNetwork {
+            version: CACHE_VERSION,
+            nodes: vec![
+                CachedNode {
+                    lat: 39.95,
+                    lng: -75.16,
+                },
+                CachedNode {
+                    lat: 39.96,
+                    lng: -75.17,
+                },
+            ],
+            edges: vec![CachedEdge {
+                from: 0,
+                to: 1,
+                travel_time_s: 60.0,
+                distance_m: 1_000.0,
+            }],
+        };
+        let data = serde_json::to_string(&cached).expect("cached network should serialize");
+        tokio::fs::write(&cache_path, data)
+            .await
+            .expect("cache file should be written");
+
+        let config = NetworkConfig::new().cache_dir(&cache_dir);
+        let network = RoadNetwork::load_or_fetch(&bbox, &config, None).await;
+        assert!(network.is_ok(), "disk cache load should succeed");
+
+        assert_cache_stats(CacheStats {
+            networks_cached: 1,
+            total_nodes: 0,
+            total_edges: 0,
+            memory_bytes: 0,
+            load_requests: 1,
+            memory_hits: 0,
+            disk_hits: 1,
+            network_fetches: 0,
+            in_flight_waits: 0,
+        })
+        .await;
+
+        let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn load_or_fetch_records_waiter_for_same_key_contention() {
+        let _guard = fetch_test_lock().lock().await;
+        reset_test_state().await;
+
+        let bbox = BoundingBox::new(39.95, -75.17, 39.96, -75.16);
+        let cache_dir = unique_cache_dir("waiter");
+        let (endpoint, requests, handle) =
+            spawn_overpass_server(vec![("200 OK", overpass_fixture_json())]);
+        let config = NetworkConfig::new()
+            .overpass_endpoints(vec![endpoint])
+            .cache_dir(&cache_dir)
+            .overpass_max_retries(0);
+
+        let first = RoadNetwork::load_or_fetch(&bbox, &config, None);
+        let second = RoadNetwork::load_or_fetch(&bbox, &config, None);
+        let (left, right) = tokio::join!(first, second);
+        assert!(left.is_ok(), "first concurrent load should succeed");
+        assert!(right.is_ok(), "second concurrent load should succeed");
+
+        handle.join().expect("server thread should finish");
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+
+        assert_cache_stats(CacheStats {
+            networks_cached: 1,
+            total_nodes: 0,
+            total_edges: 0,
+            memory_bytes: 0,
+            load_requests: 2,
+            memory_hits: 0,
+            disk_hits: 0,
+            network_fetches: 1,
+            in_flight_waits: 1,
+        })
+        .await;
+
+        let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn acquire_in_flight_slot_does_not_count_existing_unlocked_slot_as_wait() {
+        let _guard = fetch_test_lock().lock().await;
+        reset_test_state().await;
+
+        let key = "burst-window";
+        let slot = Arc::new(Mutex::new(()));
+        in_flight_loads()
+            .lock()
+            .await
+            .insert(key.to_string(), slot.clone());
+
+        let (_slot, acquired_guard, waited) = acquire_in_flight_slot(key).await;
+        assert!(
+            !waited,
+            "existing slot without lock contention should not count as a wait"
+        );
+        drop(acquired_guard);
+
+        cleanup_in_flight_slot(key, &slot).await;
+    }
+
+    #[tokio::test]
+    async fn acquire_in_flight_slot_reports_wait_when_lock_is_held() {
+        let _guard = fetch_test_lock().lock().await;
+        reset_test_state().await;
+
+        let key = "held-slot";
+        let slot = Arc::new(Mutex::new(()));
+        let held_guard = slot.clone().lock_owned().await;
+        in_flight_loads()
+            .lock()
+            .await
+            .insert(key.to_string(), slot.clone());
+
+        let waiter = tokio::spawn(async move {
+            let (_slot, guard, waited) = acquire_in_flight_slot(key).await;
+            (guard, waited)
+        });
+
+        tokio::task::yield_now().await;
+        drop(held_guard);
+
+        let (acquired_guard, waited) = waiter
+            .await
+            .expect("waiter task should complete after lock release");
+        assert!(waited, "blocked acquisition should count as a wait");
+        drop(acquired_guard);
+
+        cleanup_in_flight_slot(key, &slot).await;
     }
 
     fn overpass_fixture_json() -> &'static str {

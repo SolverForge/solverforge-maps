@@ -17,8 +17,11 @@ pub const CACHE_VERSION: u32 = 5;
 
 static NETWORK_CACHE: OnceLock<RwLock<HashMap<String, RoadNetwork>>> = OnceLock::new();
 static IN_FLIGHT_LOADS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
-static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
-static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static LOAD_REQUESTS: AtomicU64 = AtomicU64::new(0);
+static MEMORY_HITS: AtomicU64 = AtomicU64::new(0);
+static DISK_HITS: AtomicU64 = AtomicU64::new(0);
+static NETWORK_FETCHES: AtomicU64 = AtomicU64::new(0);
+static IN_FLIGHT_WAITS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn cache() -> &'static RwLock<HashMap<String, RoadNetwork>> {
     NETWORK_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
@@ -28,12 +31,33 @@ pub(crate) fn in_flight_loads() -> &'static Mutex<HashMap<String, Arc<Mutex<()>>
     IN_FLIGHT_LOADS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(crate) fn record_hit() {
-    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+pub(crate) fn record_load_request() {
+    LOAD_REQUESTS.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn record_miss() {
-    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+pub(crate) fn record_memory_hit() {
+    MEMORY_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_disk_hit() {
+    DISK_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_network_fetch() {
+    NETWORK_FETCHES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_in_flight_wait() {
+    IN_FLIGHT_WAITS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn reset_cache_metrics() {
+    LOAD_REQUESTS.store(0, Ordering::Relaxed);
+    MEMORY_HITS.store(0, Ordering::Relaxed);
+    DISK_HITS.store(0, Ordering::Relaxed);
+    NETWORK_FETCHES.store(0, Ordering::Relaxed);
+    IN_FLIGHT_WAITS.store(0, Ordering::Relaxed);
 }
 
 #[derive(Debug, Clone)]
@@ -42,19 +66,11 @@ pub struct CacheStats {
     pub total_nodes: usize,
     pub total_edges: usize,
     pub memory_bytes: usize,
-    pub hits: u64,
-    pub misses: u64,
-}
-
-impl CacheStats {
-    pub fn hit_ratio(&self) -> f64 {
-        let total = self.hits + self.misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.hits as f64 / total as f64
-        }
-    }
+    pub load_requests: u64,
+    pub memory_hits: u64,
+    pub disk_hits: u64,
+    pub network_fetches: u64,
+    pub in_flight_waits: u64,
 }
 
 /// RAII guard providing zero-cost access to a cached RoadNetwork.
@@ -135,8 +151,11 @@ impl RoadNetwork {
             total_nodes,
             total_edges,
             memory_bytes,
-            hits: CACHE_HITS.load(Ordering::Relaxed),
-            misses: CACHE_MISSES.load(Ordering::Relaxed),
+            load_requests: LOAD_REQUESTS.load(Ordering::Relaxed),
+            memory_hits: MEMORY_HITS.load(Ordering::Relaxed),
+            disk_hits: DISK_HITS.load(Ordering::Relaxed),
+            network_fetches: NETWORK_FETCHES.load(Ordering::Relaxed),
+            in_flight_waits: IN_FLIGHT_WAITS.load(Ordering::Relaxed),
         }
     }
 
