@@ -404,6 +404,7 @@ out body;"#,
         F: Future<Output = Result<RoadNetwork, RoutingError>>,
     {
         if let Some(cached) = Self::get_cached_network(cache_key.clone()).await {
+            record_memory_hit();
             return Ok(cached);
         }
 
@@ -413,6 +414,7 @@ out body;"#,
         }
 
         if let Some(cached) = Self::get_cached_network(cache_key.clone()).await {
+            record_memory_hit();
             cleanup_in_flight_slot(&cache_key, &slot).await;
             return Ok(cached);
         }
@@ -841,7 +843,7 @@ mod tests {
             total_edges: 0,
             memory_bytes: 0,
             load_requests: 2,
-            memory_hits: 0,
+            memory_hits: 1,
             disk_hits: 0,
             network_fetches: 1,
             in_flight_waits: 1,

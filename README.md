@@ -402,6 +402,9 @@ RoadNetwork::clear_cache().await;
 The old aggregate `hits` / `misses` counters are intentionally not exposed
 because they did not distinguish memory, disk, network, or contention outcomes
 accurately.
+`in_flight_waits` is additive contention metadata, so a request that waits and
+then returns from the in-memory cache counts as both a memory hit and an
+in-flight wait.
 
 ---
 
