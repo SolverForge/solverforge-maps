@@ -21,7 +21,7 @@ VERSION := $(shell grep -m1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1
 RUST_VERSION := 1.80+
 
 # ============== Phony Targets ==============
-.PHONY: banner help build build-release test test-quick test-doc test-unit test-one \
+.PHONY: banner help build build-release test test-live test-quick test-doc test-unit test-one \
         lint fmt fmt-check clippy ci-local pre-release version bump-patch bump-minor bump-major \
         bump-dry publish-dry publish clean watch
 
@@ -68,8 +68,13 @@ test: banner
 	@cargo test && \
 		printf "\n$(GREEN)$(CHECK) All tests passed$(RESET)\n\n" || \
 		(printf "\n$(RED)$(CROSS) Tests failed$(RESET)\n\n" && exit 1)
-	@printf "$(ARROW) $(BOLD)Visual test output:$(RESET)\n"
-	@cargo test visual --quiet -- --nocapture 2>/dev/null
+	@$(MAKE) test-live --no-print-directory
+
+test-live:
+	@printf "$(PROGRESS) Running live integration tests...\n"
+	@SOLVERFORGE_RUN_LIVE_TESTS=1 cargo test --test live_integration -- --nocapture && \
+		printf "$(GREEN)$(CHECK) Live integration tests passed$(RESET)\n" || \
+		(printf "$(RED)$(CROSS) Live integration tests failed$(RESET)\n" && exit 1)
 
 test-quick: banner
 	@printf "$(CYAN)$(BOLD)╔══════════════════════════════════════╗$(RESET)\n"
@@ -180,6 +185,7 @@ pre-release: banner
 	@$(MAKE) clippy --no-print-directory
 	@printf "$(PROGRESS) Running full test suite...\n"
 	@cargo test --quiet && printf "$(GREEN)$(CHECK) All tests passed$(RESET)\n"
+	@$(MAKE) test-live --no-print-directory
 	@printf "\n$(GREEN)$(BOLD)$(CHECK) Ready for release v$(VERSION)$(RESET)\n\n"
 
 # ============== Publishing ==============
@@ -231,6 +237,7 @@ help: banner
 	@/bin/echo -e ""
 	@/bin/echo -e "$(CYAN)$(BOLD)Test Commands:$(RESET)"
 	@/bin/echo -e "  $(GREEN)make test$(RESET)           - Run all tests"
+	@/bin/echo -e "  $(GREEN)make test-live$(RESET)      - Run live integration tests against external services"
 	@/bin/echo -e "  $(GREEN)make test-quick$(RESET)     - Run doctests + unit + integration tests (fast)"
 	@/bin/echo -e "  $(GREEN)make test-doc$(RESET)       - Run doctests only"
 	@/bin/echo -e "  $(GREEN)make test-unit$(RESET)      - Run unit tests only"
@@ -244,7 +251,7 @@ help: banner
 	@/bin/echo -e ""
 	@/bin/echo -e "$(CYAN)$(BOLD)CI & Quality:$(RESET)"
 	@/bin/echo -e "  $(GREEN)make ci-local$(RESET)       - $(YELLOW)$(BOLD)Simulate GitHub Actions CI locally$(RESET)"
-	@/bin/echo -e "  $(GREEN)make pre-release$(RESET)    - Run all validation checks"
+	@/bin/echo -e "  $(GREEN)make pre-release$(RESET)    - Run all validation checks, including live integration tests"
 	@/bin/echo -e ""
 	@/bin/echo -e "$(CYAN)$(BOLD)Version Management:$(RESET)"
 	@/bin/echo -e "  $(GREEN)make version$(RESET)        - Show current version"

@@ -19,7 +19,7 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 
 ```toml
 [dependencies]
-solverforge-maps = "1.0"
+solverforge-maps = "2.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -381,7 +381,11 @@ println!("Cached networks: {}", stats.networks_cached);
 println!("Total nodes: {}", stats.total_nodes);
 println!("Total edges: {}", stats.total_edges);
 println!("Memory: {} bytes", stats.memory_bytes);
-println!("Hits: {}, Misses: {}", stats.hits, stats.misses);
+println!("Load requests: {}", stats.load_requests);
+println!("Memory hits: {}", stats.memory_hits);
+println!("Disk hits: {}", stats.disk_hits);
+println!("Network fetches: {}", stats.network_fetches);
+println!("In-flight waits: {}", stats.in_flight_waits);
 
 // List cached regions
 let regions: Vec<BoundingBox> = RoadNetwork::cached_regions().await;
@@ -393,6 +397,11 @@ let evicted: bool = RoadNetwork::evict(&bbox).await;
 // Clear entire cache
 RoadNetwork::clear_cache().await;
 ```
+
+`CacheStats` reports outcome-based cache metrics for `load_or_fetch` requests.
+The old aggregate `hits` / `misses` counters are intentionally not exposed
+because they did not distinguish memory, disk, network, or contention outcomes
+accurately.
 
 ---
 
@@ -576,6 +585,32 @@ rm -rf .osm_cache/
 ```rust
 // Or programmatically
 RoadNetwork::clear_cache().await;
+```
+
+---
+
+## Testing
+
+Hermetic tests run by default:
+
+```bash
+cargo test
+```
+
+Live external-service integration tests are enabled explicitly for local runs:
+
+```bash
+make test-live
+```
+
+`make test` and `make pre-release` include the live suite locally. GitHub CI
+does not set `SOLVERFORGE_RUN_LIVE_TESTS=1`, so workflow runs stay self-contained
+and skip external-service checks by policy.
+
+For manual network visualization against live Overpass data, run:
+
+```bash
+cargo run --example live_network_visualization
 ```
 
 ---
