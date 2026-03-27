@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.1.0](///compare/v2.0.1...v2.1.0) (2026-03-27)
+
+
+### Features
+
+* expose precise cache-layer metrics a8a6929
+
 ## [2.1.0](https://github.com/SolverForge/solverforge-maps/compare/v2.0.1...v2.1.0) (2026-03-26)
 
 ### Features
