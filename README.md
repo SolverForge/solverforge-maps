@@ -19,7 +19,7 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 
 ```toml
 [dependencies]
-solverforge-maps = "1.0"
+solverforge-maps = "2.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -398,6 +398,11 @@ let evicted: bool = RoadNetwork::evict(&bbox).await;
 RoadNetwork::clear_cache().await;
 ```
 
+`CacheStats` reports outcome-based cache metrics for `load_or_fetch` requests.
+The old aggregate `hits` / `misses` counters are intentionally not exposed
+because they did not distinguish memory, disk, network, or contention outcomes
+accurately.
+
 ---
 
 ### Progress Reporting
@@ -580,6 +585,32 @@ rm -rf .osm_cache/
 ```rust
 // Or programmatically
 RoadNetwork::clear_cache().await;
+```
+
+---
+
+## Testing
+
+Hermetic tests run by default:
+
+```bash
+cargo test
+```
+
+Live external-service integration tests are enabled explicitly for local runs:
+
+```bash
+make test-live
+```
+
+`make test` and `make pre-release` include the live suite locally. GitHub CI
+does not set `SOLVERFORGE_RUN_LIVE_TESTS=1`, so workflow runs stay self-contained
+and skip external-service checks by policy.
+
+For manual network visualization against live Overpass data, run:
+
+```bash
+cargo run --example live_network_visualization
 ```
 
 ---
