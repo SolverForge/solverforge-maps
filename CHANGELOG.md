@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.1.3](///compare/v2.1.2...v2.1.3) (2026-04-12)
+
 ## [2.1.2](https://github.com/SolverForge/solverforge-maps/compare/v2.1.1...v2.1.2) (2026-04-12)
 
 ### Chores
