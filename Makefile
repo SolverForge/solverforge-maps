@@ -181,11 +181,19 @@ pre-release: banner
 	@printf "$(CYAN)$(BOLD)╔══════════════════════════════════════════════════════════╗$(RESET)\n"
 	@printf "$(CYAN)$(BOLD)║            Pre-Release Validation v$(VERSION)                  ║$(RESET)\n"
 	@printf "$(CYAN)$(BOLD)╚══════════════════════════════════════════════════════════╝$(RESET)\n\n"
+	@printf "$(PROGRESS) Verifying release metadata...\n"
+	@cargo metadata --locked --format-version 1 >/dev/null && \
+		printf "$(GREEN)$(CHECK) Cargo metadata is in sync$(RESET)\n" || \
+		(printf "$(RED)$(CROSS) Cargo metadata is out of sync$(RESET)\n" && exit 1)
 	@$(MAKE) fmt-check --no-print-directory
 	@$(MAKE) clippy --no-print-directory
 	@printf "$(PROGRESS) Running full test suite...\n"
 	@cargo test --quiet && printf "$(GREEN)$(CHECK) All tests passed$(RESET)\n"
 	@$(MAKE) test-live --no-print-directory
+	@printf "$(PROGRESS) Running publish dry-run...\n"
+	@cargo publish --dry-run --locked && \
+		printf "$(GREEN)$(CHECK) Publish dry-run successful$(RESET)\n" || \
+		(printf "$(RED)$(CROSS) Publish dry-run failed$(RESET)\n" && exit 1)
 	@printf "\n$(GREEN)$(BOLD)$(CHECK) Ready for release v$(VERSION)$(RESET)\n\n"
 
 # ============== Publishing ==============
@@ -196,7 +204,7 @@ publish-dry: test banner
 	@printf "$(CYAN)$(BOLD)╚══════════════════════════════════════════════════════════╝$(RESET)\n\n"
 	@printf "$(GREEN)$(CHECK) All tests passed$(RESET)\n"
 	@printf "$(PROGRESS) Running publish dry-run...\n"
-	@cargo publish --dry-run && \
+	@cargo publish --dry-run --locked && \
 		printf "$(GREEN)$(CHECK) Publish dry-run successful$(RESET)\n\n" || \
 		(printf "$(RED)$(CROSS) Publish dry-run failed$(RESET)\n\n" && exit 1)
 
@@ -208,7 +216,7 @@ publish: banner
 	@printf "$(YELLOW)Press Ctrl+C to abort, or Enter to continue...$(RESET)\n"
 	@read dummy
 	@printf "\n$(PROGRESS) Publishing solverforge-maps...\n"
-	@cargo publish && \
+	@cargo publish --locked && \
 		printf "$(GREEN)$(CHECK) Published successfully$(RESET)\n\n" || \
 		(printf "$(RED)$(CROSS) Publish failed$(RESET)\n\n" && exit 1)
 	@printf "\n$(GREEN)$(BOLD)╔══════════════════════════════════════════════════════════╗$(RESET)\n"

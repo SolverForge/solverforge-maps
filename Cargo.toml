@@ -1,6 +1,6 @@
 [package]
 name = "solverforge-maps"
-version = "2.1.1"
+version = "2.1.2"
 edition = "2021"
 description = "Generic map and routing utilities for VRP and similar problems"
 license = "Apache-2.0"
