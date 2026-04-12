@@ -2,7 +2,7 @@
 # Rust build system with colorized output
 
 # ============== Colors & Symbols ==============
-GREEN := \033[92m
+GREEN := \033[38;2;16;185;129m
 CYAN := \033[96m
 YELLOW := \033[93m
 MAGENTA := \033[95m
