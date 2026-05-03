@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.1.4](///compare/v2.1.3...v2.1.4) (2026-05-03)
+
+
+### Features
+
+* **matrix:** expose route distances in travel-time matrix 8fb1c8d
+
 ## [2.1.4](https://github.com/SolverForge/solverforge-maps/compare/v2.1.3...v2.1.4) (2026-05-03)
 
 ### Features
