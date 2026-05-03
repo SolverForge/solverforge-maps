@@ -115,6 +115,7 @@ where
 /// Optionally stops at `goal` if provided.
 ///
 /// Returns a map from node index to shortest distance.
+#[allow(dead_code)]
 pub fn dijkstra<N, E, C>(
     graph: &DiGraph<N, E>,
     start: NodeIdx,
@@ -156,6 +157,72 @@ where
 
                 if is_better {
                     dist.insert(to, next_cost);
+                    heap.push(State {
+                        cost: next_cost,
+                        estimated: next_cost,
+                        node: to,
+                    });
+                }
+            }
+        }
+    }
+
+    dist
+}
+
+/// Dijkstra's algorithm for single-source shortest paths with a secondary
+/// metric accumulated along the selected primary-cost path.
+pub(crate) fn dijkstra_with_secondary<N, E, C, S>(
+    graph: &DiGraph<N, E>,
+    start: NodeIdx,
+    goal: Option<NodeIdx>,
+    edge_cost: C,
+    edge_secondary: S,
+) -> HashMap<NodeIdx, (f64, f64)>
+where
+    C: Fn(&E) -> f64,
+    S: Fn(&E) -> f64,
+{
+    let mut dist: HashMap<NodeIdx, (f64, f64)> = HashMap::new();
+    let mut heap = BinaryHeap::new();
+
+    dist.insert(start, (0.0, 0.0));
+    heap.push(State {
+        cost: 0.0,
+        estimated: 0.0,
+        node: start,
+    });
+
+    while let Some(State { cost, node, .. }) = heap.pop() {
+        if let Some(g) = goal {
+            if node == g {
+                break;
+            }
+        }
+
+        let Some(&(known_cost, known_secondary)) = dist.get(&node) else {
+            continue;
+        };
+        if cost > known_cost {
+            continue;
+        }
+
+        for &edge_idx in graph.outgoing_edges(node) {
+            if let (Some(edge_data), Some((_, to))) =
+                (graph.edge_weight(edge_idx), graph.edge_endpoints(edge_idx))
+            {
+                let next_cost = cost + edge_cost(edge_data);
+                let next_secondary = known_secondary + edge_secondary(edge_data);
+                let is_better = dist
+                    .get(&to)
+                    .map(|&(current_cost, current_secondary)| {
+                        next_cost < current_cost
+                            || (next_cost == current_cost && next_secondary < current_secondary)
+                    })
+                    .unwrap_or(true);
+
+                if is_better {
+                    dist.insert(to, (next_cost, next_secondary));
                     heap.push(State {
                         cost: next_cost,
                         estimated: next_cost,

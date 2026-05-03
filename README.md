@@ -7,7 +7,7 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 - **OSM Road Network**: Download and cache OpenStreetMap road data via Overpass API
 - **K-D Tree Spatial Indexing**: Nearest-node and nearest-segment snapping on the road network
 - **Shortest Path Routing**: Dijkstra-style shortest paths for time and distance objectives
-- **Travel Time Matrix**: Compute all-pairs travel times with parallel computation
+- **Travel Time Matrix**: Compute all-pairs travel times plus same-path route distances with parallel computation
 - **Route Geometry**: Node-snapped and edge-snapped route geometries with Douglas-Peucker simplification
 - **Polyline Encoding**: Google Polyline Algorithm for efficient route transmission
 - **Input Validation**: Fail-fast coordinate and bounding box validation
@@ -303,7 +303,7 @@ println!("Largest component contains {:.1}% of nodes", largest_fraction * 100.0)
 
 ### TravelTimeMatrix
 
-Travel time matrix with metadata and analysis methods.
+Travel time matrix with same-path route distances, metadata, and analysis methods.
 
 ```rust
 use solverforge_maps::{Coord, TravelTimeMatrix, UNREACHABLE};
@@ -317,10 +317,12 @@ let locations = vec![
 // Compute matrix (async, parallel via rayon internally)
 let matrix: TravelTimeMatrix = network.compute_matrix(&locations, None).await;
 
-// Access travel times
-let time: Option<i64> = matrix.get(0, 1);           // From location 0 to 1
-let row: Option<&[i64]> = matrix.row(0);            // All times from location 0
-let reachable: bool = matrix.is_reachable(0, 1);    // Check if pair is reachable
+// Access travel times and same-path distances
+let time: Option<i64> = matrix.get(0, 1);                  // From location 0 to 1
+let distance: Option<i64> = matrix.distance_meters(0, 1);  // Meters along that fastest-time path
+let row: Option<&[i64]> = matrix.row(0);                   // All times from location 0
+let distance_row: Option<&[i64]> = matrix.row_distances(0); // All distances from location 0
+let reachable: bool = matrix.is_reachable(0, 1);           // Check if pair is reachable
 
 // Matrix metadata
 let size: usize = matrix.size();                     // Number of locations
@@ -550,7 +552,7 @@ match network.route(from, to) {
 | `NetworkRef` | Zero-cost reference to cached network |
 | `RouteResult` | Single route with geometry |
 | `SnappedCoord` | Coordinate snapped to road network |
-| `TravelTimeMatrix` | N x N travel time matrix |
+| `TravelTimeMatrix` | N x N travel time matrix with same-path route distances |
 | `CacheStats` | Cache statistics and metrics |
 | `EncodedSegment` | Pre-encoded route segment |
 

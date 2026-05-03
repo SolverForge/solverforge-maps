@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use tokio::sync::mpsc::{self, Sender};
 
-use super::algo::dijkstra;
+use super::algo::dijkstra_with_secondary;
 use super::coord::Coord;
 use super::graph::NodeIdx;
 use super::network::{RoadNetwork, SnappedCoord};
@@ -15,16 +15,24 @@ pub const UNREACHABLE: i64 = i64::MAX;
 #[derive(Debug, Clone, Default)]
 pub struct TravelTimeMatrix {
     data: Vec<i64>,
+    distance_data: Vec<i64>,
     size: usize,
     locations: Vec<SnappedCoord>,
 }
 
 impl TravelTimeMatrix {
-    pub(crate) fn new(data: Vec<i64>, size: usize, locations: Vec<SnappedCoord>) -> Self {
+    pub(crate) fn new(
+        data: Vec<i64>,
+        distance_data: Vec<i64>,
+        size: usize,
+        locations: Vec<SnappedCoord>,
+    ) -> Self {
         debug_assert_eq!(data.len(), size * size);
+        debug_assert_eq!(distance_data.len(), size * size);
         debug_assert_eq!(locations.len(), size);
         Self {
             data,
+            distance_data,
             size,
             locations,
         }
@@ -50,6 +58,19 @@ impl TravelTimeMatrix {
             .unwrap_or(false)
     }
 
+    /// Get the route distance in meters from one location to another.
+    ///
+    /// Returns `None` if indices are out of bounds.
+    /// Returns `Some(UNREACHABLE)` if the pair is not reachable.
+    #[inline]
+    pub fn distance_meters(&self, from: usize, to: usize) -> Option<i64> {
+        if from < self.size && to < self.size {
+            Some(self.distance_data[from * self.size + to])
+        } else {
+            None
+        }
+    }
+
     #[inline]
     pub fn size(&self) -> usize {
         self.size
@@ -65,6 +86,16 @@ impl TravelTimeMatrix {
         if i < self.size {
             let start = i * self.size;
             Some(&self.data[start..start + self.size])
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn row_distances(&self, i: usize) -> Option<&[i64]> {
+        if i < self.size {
+            let start = i * self.size;
+            Some(&self.distance_data[start..start + self.size])
         } else {
             None
         }
@@ -160,6 +191,10 @@ impl TravelTimeMatrix {
     pub fn as_slice(&self) -> &[i64] {
         &self.data
     }
+
+    pub fn distances_as_slice(&self) -> &[i64] {
+        &self.distance_data
+    }
 }
 
 impl RoadNetwork {
@@ -170,7 +205,7 @@ impl RoadNetwork {
     ) -> TravelTimeMatrix {
         let n = locations.len();
         if n == 0 {
-            return TravelTimeMatrix::new(vec![], 0, vec![]);
+            return TravelTimeMatrix::new(vec![], vec![], 0, vec![]);
         }
 
         let node_snapped: Vec<Option<SnappedCoord>> = locations
@@ -218,24 +253,32 @@ impl RoadNetwork {
         // Compute rows in parallel via rayon - each row runs Dijkstra from source endpoints
         let graph = &self.graph;
         let progress_tx = row_progress.as_ref().map(|(tx, _)| tx.clone());
-        let rows: Vec<Vec<i64>> = (0..n)
+        let rows: Vec<(Vec<i64>, Vec<i64>)> = (0..n)
             .into_par_iter()
             .map(|i| {
                 let mut row = vec![0i64; n];
+                let mut distance_row = vec![0i64; n];
 
                 let Some(from) = &node_snapped[i] else {
                     for (j, cell) in row.iter_mut().enumerate() {
                         if i != j {
                             *cell = UNREACHABLE;
+                            distance_row[j] = UNREACHABLE;
                         }
                     }
                     if let Some(tx) = &progress_tx {
                         let _ = tx.send(i);
                     }
-                    return row;
+                    return (row, distance_row);
                 };
 
-                let costs = dijkstra(graph, from.node_index, None, |e| e.travel_time_s);
+                let costs = dijkstra_with_secondary(
+                    graph,
+                    from.node_index,
+                    None,
+                    |e| e.travel_time_s,
+                    |e| e.distance_m,
+                );
 
                 for j in 0..n {
                     if i == j {
@@ -244,20 +287,23 @@ impl RoadNetwork {
 
                     let Some(to) = &node_snapped[j] else {
                         row[j] = UNREACHABLE;
+                        distance_row[j] = UNREACHABLE;
                         continue;
                     };
 
-                    row[j] = if let Some(&best) = costs.get(&to.node_index) {
-                        best.round() as i64
+                    if let Some(&(duration, distance)) = costs.get(&to.node_index) {
+                        row[j] = duration.round() as i64;
+                        distance_row[j] = distance.round() as i64;
                     } else {
-                        UNREACHABLE
-                    };
+                        row[j] = UNREACHABLE;
+                        distance_row[j] = UNREACHABLE;
+                    }
                 }
 
                 if let Some(tx) = &progress_tx {
                     let _ = tx.send(i);
                 }
-                row
+                (row, distance_row)
             })
             .collect();
 
@@ -270,8 +316,13 @@ impl RoadNetwork {
             let _ = tx.send(RoutingProgress::Complete).await;
         }
 
-        let data: Vec<i64> = rows.into_iter().flatten().collect();
-        TravelTimeMatrix::new(data, n, snapped_locations)
+        let mut data = Vec::with_capacity(n * n);
+        let mut distance_data = Vec::with_capacity(n * n);
+        for (row, distance_row) in rows {
+            data.extend(row);
+            distance_data.extend(distance_row);
+        }
+        TravelTimeMatrix::new(data, distance_data, n, snapped_locations)
     }
 
     pub async fn compute_geometries(

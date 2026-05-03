@@ -491,4 +491,50 @@ mod matrix {
         assert_eq!(matrix.locations()[0].snapped, Coord::new(0.0, 0.0));
         assert_eq!(matrix.locations()[1].snapped, Coord::new(0.0, 2.0));
     }
+
+    #[tokio::test]
+    async fn matrix_exposes_route_distance_for_reachable_pairs() {
+        let network = RoadNetwork::from_test_data(
+            &[(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)],
+            &[(0, 1, 50.0, 500.0), (1, 2, 75.0, 800.0)],
+        );
+        let locations = vec![Coord::new(0.0, 0.0), Coord::new(0.0, 2.0)];
+
+        let matrix = network.compute_matrix(&locations, None).await;
+
+        assert_eq!(matrix.get(0, 1), Some(125));
+        assert_eq!(matrix.distance_meters(0, 1), Some(1_300));
+        assert_eq!(matrix.row_distances(0), Some(&[0, 1_300][..]));
+    }
+
+    #[tokio::test]
+    async fn matrix_distance_keeps_unreachable_sentinel() {
+        let network = RoadNetwork::from_test_data(&[(0.0, 0.0), (0.0, 1.0)], &[]);
+        let locations = vec![Coord::new(0.0, 0.0), Coord::new(0.0, 1.0)];
+
+        let matrix = network.compute_matrix(&locations, None).await;
+
+        assert_eq!(matrix.get(0, 1), Some(UNREACHABLE));
+        assert_eq!(matrix.distance_meters(0, 1), Some(UNREACHABLE));
+        assert_eq!(matrix.distance_meters(2, 0), None);
+    }
+
+    #[tokio::test]
+    async fn matrix_distance_follows_fastest_time_path() {
+        let network = RoadNetwork::from_test_data(
+            &[(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)],
+            &[
+                (0, 1, 10.0, 10_000.0),
+                (1, 3, 10.0, 10_000.0),
+                (0, 2, 50.0, 100.0),
+                (2, 3, 50.0, 100.0),
+            ],
+        );
+        let locations = vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)];
+
+        let matrix = network.compute_matrix(&locations, None).await;
+
+        assert_eq!(matrix.get(0, 1), Some(20));
+        assert_eq!(matrix.distance_meters(0, 1), Some(20_000));
+    }
 }

@@ -178,7 +178,7 @@ impl<N, E> DiGraph<N, E> {
         let old_edges = std::mem::take(&mut self.edges);
         let old_endpoints = std::mem::take(&mut self.edge_endpoints);
 
-        for (edge, (from, to)) in old_edges.into_iter().zip(old_endpoints.into_iter()) {
+        for (edge, (from, to)) in old_edges.into_iter().zip(old_endpoints) {
             if let (Some(&new_from), Some(&new_to)) =
                 (old_to_new.get(&from.0), old_to_new.get(&to.0))
             {
