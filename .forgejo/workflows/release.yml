@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 2.1.4)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: rust
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+
+      - name: Verify release metadata
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            EXPECTED_VERSION="${{ github.event.inputs.version }}"
+          else
+            EXPECTED_VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+
+          MANIFEST_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$MANIFEST_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::Cargo.toml version ${MANIFEST_VERSION} does not match release version ${EXPECTED_VERSION}"
+            exit 1
+          fi
+
+          cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --locked --all-features --release
+
+      - name: Run all tests
+        run: cargo test --locked --all-features
+
+      - name: Run integration tests
+        run: cargo test --locked --all-features --test '*'
+
+      - name: Run doc tests
+        run: cargo test --locked --doc
+
+  create-release:
+    name: Create Release
+    runs-on: rust
+    needs: [test]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"* %s (%h)" $PREV_TAG..HEAD)
+          else
+            CHANGELOG=$(git log --pretty=format:"* %s (%h)" -20)
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: v${{ steps.version.outputs.version }}
+          body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## Installation
+
+            **Rust:**
+            ```toml
+            [dependencies]
+            solverforge-maps = "${{ steps.version.outputs.version }}"
+            ```
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
