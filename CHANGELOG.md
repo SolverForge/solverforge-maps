@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.1.5](https://github.com/SolverForge/solverforge-maps/compare/v2.1.4...v2.1.5) (2026-11-03)
+
+### Bug Fixes
+
+* **fetch:** identify the crate release in the Overpass User-Agent ([fa35491](https://github.com/SolverForge/solverforge-maps/commit/fa35491)). Requests sent the stale `SolverForge/0.5.0`; they now send `solverforge-maps/<version> (+<repository>)`, as the Overpass usage policy requires.
+
 ## [2.1.4](///compare/v2.1.3...v2.1.4) (2026-05-03)
 
 
