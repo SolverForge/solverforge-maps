@@ -23,6 +23,18 @@ use super::network::{EdgeData, RoadNetwork};
 use super::osm::OverpassResponse;
 use super::progress::RoutingProgress;
 
+/// Identifies this crate and release to Overpass servers, whose usage policy
+/// requires a User-Agent that names the client. Built from the manifest so it
+/// follows every release.
+pub(crate) const USER_AGENT: &str = concat!(
+    env!("CARGO_PKG_NAME"),
+    "/",
+    env!("CARGO_PKG_VERSION"),
+    " (+",
+    env!("CARGO_PKG_REPOSITORY"),
+    ")"
+);
+
 impl RoadNetwork {
     pub async fn load_or_fetch(
         bbox: &BoundingBox,
@@ -131,7 +143,7 @@ out body;"#,
             .connect_timeout(config.connect_timeout)
             .read_timeout(config.read_timeout)
             .timeout(config.read_timeout)
-            .user_agent("SolverForge/0.5.0")
+            .user_agent(USER_AGENT)
             .build()
             .map_err(|e| RoutingError::Network(e.to_string()))?;
 

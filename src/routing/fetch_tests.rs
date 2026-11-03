@@ -396,3 +396,50 @@ async fn fetch_falls_back_to_second_endpoint() {
         .join()
         .expect("secondary server should join");
 }
+
+#[tokio::test]
+async fn fetch_identifies_the_crate_release_in_the_user_agent() {
+    let _guard = fetch_test_lock().lock().await;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+    let endpoint = format!(
+        "http://{}/api/interpreter",
+        listener.local_addr().expect("listener addr")
+    );
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("connection should arrive");
+        let mut buffer = [0_u8; 8192];
+        let read = stream.read(&mut buffer).expect("request should read");
+        let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+        let body = overpass_fixture_json();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("response should write");
+        request
+    });
+
+    let bbox = BoundingBox::try_new(39.94, -75.18, 39.97, -75.15).expect("bbox should build");
+    let config = NetworkConfig::default()
+        .overpass_url(endpoint)
+        .overpass_max_retries(0);
+    RoadNetwork::fetch(&bbox, &config, None)
+        .await
+        .expect("fetch should succeed");
+
+    let request = handle.join().expect("server should join");
+    let expected = format!(
+        "user-agent: solverforge-maps/{} (+{})",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY")
+    );
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains(&expected.to_ascii_lowercase()),
+        "request should carry {expected:?}:\n{request}"
+    );
+}
