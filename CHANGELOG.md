@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.2.0](https://github.com/SolverForge/solverforge-maps/compare/v2.1.5...v2.2.0) (2026-11-06)
+
+### Bug Fixes
+
+* **routing:** build a car-legal road graph ([9f040c4](https://github.com/SolverForge/solverforge-maps/commit/9f040c4)).
+  * Default roads include the `motorway_link`, `trunk_link`, `primary_link`, `secondary_link` and `tertiary_link` ramps; without them motorways could not be entered or left.
+  * Roundabouts (`junction=roundabout`/`circular`) and motorways are one-way unless tagged otherwise; `oneway=true`, `reverse` and `reversible` follow OSM.
+  * Roads closed to cars by `motorcar`, `motor_vehicle`, `vehicle` or `access` (most specific wins) are left out; `destination` stays open.
+  * Graph nodes are OSM nodes: two OSM nodes at one position, such as a bridge over a road vertex, no longer become a junction.
+  * A route whose two points snap to the same node returns that node instead of a straight line between the raw points.
+  * The cache version moves to 6, so networks cached under the old rules are rebuilt.
+
+### Refactoring
+
+* **algo:** remove the unused single-metric Dijkstra ([6d97a07](https://github.com/SolverForge/solverforge-maps/commit/6d97a07)).
+
 ## [2.1.5](https://github.com/SolverForge/solverforge-maps/compare/v2.1.4...v2.1.5) (2026-11-03)
 
 ### Bug Fixes
