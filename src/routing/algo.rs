@@ -1,4 +1,4 @@
-//! Graph algorithms for routing: A*, Dijkstra, Kosaraju SCC.
+//! Graph algorithms for routing: A*, Dijkstra with a secondary metric, Kosaraju SCC.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -107,67 +107,6 @@ where
     }
 
     None
-}
-
-/// Dijkstra's algorithm for single-source shortest paths.
-///
-/// Computes shortest paths from `start` to all reachable nodes.
-/// Optionally stops at `goal` if provided.
-///
-/// Returns a map from node index to shortest distance.
-#[allow(dead_code)]
-pub fn dijkstra<N, E, C>(
-    graph: &DiGraph<N, E>,
-    start: NodeIdx,
-    goal: Option<NodeIdx>,
-    edge_cost: C,
-) -> HashMap<NodeIdx, f64>
-where
-    C: Fn(&E) -> f64,
-{
-    let mut dist: HashMap<NodeIdx, f64> = HashMap::new();
-    let mut heap = BinaryHeap::new();
-
-    dist.insert(start, 0.0);
-    heap.push(State {
-        cost: 0.0,
-        estimated: 0.0,
-        node: start,
-    });
-
-    while let Some(State { cost, node, .. }) = heap.pop() {
-        if let Some(g) = goal {
-            if node == g {
-                break;
-            }
-        }
-
-        if let Some(&d) = dist.get(&node) {
-            if cost > d {
-                continue;
-            }
-        }
-
-        for &edge_idx in graph.outgoing_edges(node) {
-            if let (Some(edge_data), Some((_, to))) =
-                (graph.edge_weight(edge_idx), graph.edge_endpoints(edge_idx))
-            {
-                let next_cost = cost + edge_cost(edge_data);
-                let is_better = dist.get(&to).map(|&d| next_cost < d).unwrap_or(true);
-
-                if is_better {
-                    dist.insert(to, next_cost);
-                    heap.push(State {
-                        cost: next_cost,
-                        estimated: next_cost,
-                        node: to,
-                    });
-                }
-            }
-        }
-    }
-
-    dist
 }
 
 /// Dijkstra's algorithm for single-source shortest paths with a secondary
