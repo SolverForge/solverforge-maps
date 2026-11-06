@@ -607,6 +607,51 @@ fn snapping_stays_exact_when_every_node_is_routable() {
     assert_eq!(snap.node_index.index(), 1, "the nearest node still wins");
 }
 
+#[test]
+fn snapping_skips_a_closed_stub_loop_for_a_routable_street() {
+    // A two-node stub whose nodes can enter and leave inside the stub, while
+    // the real street lies farther: the direction requirement alone accepts
+    // the loop, the larger surrounding component refuses it.
+    let through: Vec<(f64, f64)> = (0..6).map(|i| (45.0, 9.0 + 0.001 * i as f64)).collect();
+    let mut nodes = through.clone();
+    nodes.push((45.0002, 9.0));
+    nodes.push((45.0003, 9.0));
+    let mut edges: Vec<(usize, usize, f64, f64)> = (0..5)
+        .flat_map(|i| [(i, i + 1), (i + 1, i)])
+        .map(|(a, b)| (a, b, 60.0, 100.0))
+        .collect();
+    edges.push((6, 7, 30.0, 20.0));
+    edges.push((7, 6, 30.0, 20.0));
+    let network = RoadNetwork::from_test_data(&nodes, &edges);
+    let snap = network
+        .snap_road_index_with_access(Coord::new(45.0001, 9.00001), SnapAccess::Both)
+        .expect("snapping should succeed");
+    assert_eq!(
+        snap.node_index.index(),
+        0,
+        "the closed stub must be skipped"
+    );
+}
+
+#[test]
+fn snapping_keeps_an_isolated_network_when_nothing_else_is_near() {
+    // Only the stub exists nearby: the fallback returns it rather than
+    // refusing to snap at all.
+    let network = RoadNetwork::from_test_data(
+        &[(45.0, 9.0), (45.0002, 9.0), (45.0003, 9.0)],
+        &[
+            (0, 1, 30.0, 20.0),
+            (1, 0, 30.0, 20.0),
+            (0, 2, 30.0, 22.0),
+            (2, 0, 30.0, 22.0),
+        ],
+    );
+    let snap = network
+        .snap_road_index_with_access(Coord::new(45.0, 9.0), SnapAccess::Both)
+        .expect("snapping should succeed");
+    assert_eq!(snap.node_index.index(), 0, "the only network wins");
+}
+
 #[tokio::test]
 async fn matrix_stays_feasible_when_a_stop_snaps_onto_a_stub() {
     // Regression: a solve stranded the origin when its nearest node could be

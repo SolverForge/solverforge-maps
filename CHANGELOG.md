@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.3.3](https://github.com/SolverForge/solverforge-maps/compare/v2.3.2...v2.3.3) (2026-11-06)
+
+### Bug Fixes
+
+* **routing:** access-aware snapping prefers the candidate with the largest surrounding component, so a stop whose nearest node sits on a closed stub (a parking loop: entering and leaving work inside it, but no road connects it) is no longer stranded and the whole itinerary stays feasible. The union-find pass over the graph records per-node component sizes at build time; direction requirements still refuse nodes the role cannot traverse.
+
 ## [2.3.2](https://github.com/SolverForge/solverforge-maps/compare/v2.3.1...v2.3.2) (2026-11-06)
 
 ### Bug Fixes

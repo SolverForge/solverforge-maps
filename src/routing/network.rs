@@ -10,6 +10,20 @@ use super::geo::haversine_distance;
 use super::graph::{DiGraph, EdgeIdx, NodeIdx};
 use super::spatial::{KdTree, Point2D, Segment, SegmentIndex};
 
+/// Path-compressed union-find root lookup for `build_spatial_index`.
+fn component_root(parent: &mut [usize], mut root: usize) -> usize {
+    let mut probe = root;
+    while parent[probe] != probe {
+        probe = parent[probe];
+    }
+    while parent[root] != probe {
+        let next = parent[root];
+        parent[root] = probe;
+        root = next;
+    }
+    probe
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeData {
     pub lat: f64,
@@ -156,6 +170,11 @@ pub struct RoadNetwork {
     // Per node: whether an incoming and an outgoing edge exist, so access-aware
     // snapping can refuse a node an itinerary could never traverse as required.
     node_access: Option<(Vec<bool>, Vec<bool>)>,
+    // Per node: the size of its undirected component. Stub components (parking
+    // loops, gated drives) satisfy a direction requirement inside themselves,
+    // while no road connects them anywhere; access-aware snapping prefers the
+    // candidate with the most graph around it.
+    node_component_size: Option<Vec<u32>>,
     max_speed_mps: f64,
 }
 
@@ -166,6 +185,7 @@ impl RoadNetwork {
             spatial_index: None,
             edge_spatial_index: None,
             node_access: None,
+            node_component_size: None,
             max_speed_mps: 0.0,
         }
     }
@@ -266,6 +286,40 @@ impl RoadNetwork {
                 incoming[to.index()] = true;
             }
             self.node_access = Some((incoming, outgoing));
+
+            // Undirected component sizes: a stub can satisfy the direction
+            // requirement inside itself, so a parking loop is only told apart
+            // from the through network by how much graph surrounds a candidate.
+            let mut parent: Vec<usize> = (0..node_count).collect();
+            let mut sizes: Vec<usize> = vec![1; node_count];
+            for (from, to) in self
+                .graph
+                .edge_indices()
+                .filter_map(|edge| self.graph.edge_endpoints(edge))
+            {
+                let from_root = component_root(&mut parent, from.index());
+                let to_root = component_root(&mut parent, to.index());
+                if from_root == to_root {
+                    continue;
+                }
+                // Merge by size, so later finds stay shallow without a rank array.
+                if sizes[from_root] < sizes[to_root] {
+                    sizes[to_root] += sizes[from_root];
+                    sizes[from_root] = 0;
+                    parent[from_root] = to_root;
+                } else {
+                    sizes[from_root] += sizes[to_root];
+                    sizes[to_root] = 0;
+                    parent[to_root] = from_root;
+                }
+            }
+            let per_node: Vec<u32> = (0..node_count)
+                .map(|node_index| {
+                    let root = component_root(&mut parent, node_index);
+                    u32::try_from(sizes[root]).unwrap_or(u32::MAX)
+                })
+                .collect();
+            self.node_component_size = Some(per_node);
         }
     }
 
@@ -286,10 +340,19 @@ impl RoadNetwork {
         }
     }
 
+    /// Size of the undirected component that contains the node.
+    fn component_size(&self, node_index: NodeIdx) -> u32 {
+        match self.node_component_size.as_ref() {
+            Some(per_node) => per_node.get(node_index.index()).copied().unwrap_or(0),
+            None => u32::MAX,
+        }
+    }
+
     /// Snap with an explicit traversal requirement (see `SnapAccess`).
     ///
-    /// Among the nearest candidates the first node that satisfies the
-    /// requirement wins; when none does, the plain nearest node is returned.
+    /// Among the nearest candidates the winner satisfies the requirement on
+    /// the largest component (the plain nearest wins ties); when none
+    /// satisfies the requirement, the plain nearest node is returned.
     pub fn snap_road_index_with_access(
         &self,
         coord: Coord,
@@ -306,22 +369,36 @@ impl RoadNetwork {
         let query = Point2D::new(coord.lat, coord.lng);
         const SNAP_CANDIDATES: usize = 64;
         let candidates = tree.nearest_n_neighbors(&query, SNAP_CANDIDATES);
-        let chosen = candidates
-            .iter()
-            .find(|(candidate, _)| self.allows_access(candidate.node_index, access))
-            .or_else(|| candidates.first())
+        // The plain nearest wins ties: only a candidate that satisfies the
+        // requirement on a strictly larger component displaces it.
+        let mut chosen: Option<(NodeIdx, u32)> = None;
+        for (candidate, _dist) in &candidates {
+            if !self.allows_access(candidate.node_index, access) {
+                continue;
+            }
+            let size = self.component_size(candidate.node_index);
+            if chosen.is_none_or(|(_, best)| size > best) {
+                chosen = Some((candidate.node_index, size));
+            }
+        }
+        let chosen_node = match chosen {
+            Some((node, _)) => node,
+            None => candidates
+                .first()
+                .map(|(candidate, _)| candidate.node_index)
+                .ok_or(RoutingError::SnapFailed {
+                    coord,
+                    nearest_distance_m: None,
+                })?,
+        };
+
+        let node_data = self
+            .graph
+            .node_weight(chosen_node)
             .ok_or(RoutingError::SnapFailed {
                 coord,
                 nearest_distance_m: None,
             })?;
-
-        let node_data =
-            self.graph
-                .node_weight(chosen.0.node_index)
-                .ok_or(RoutingError::SnapFailed {
-                    coord,
-                    nearest_distance_m: None,
-                })?;
 
         let snapped = Coord::new(node_data.lat, node_data.lng);
         let snap_distance_m = haversine_distance(coord, snapped);
@@ -330,7 +407,7 @@ impl RoadNetwork {
             original: coord,
             snapped,
             snap_distance_m,
-            node_index: chosen.0.node_index,
+            node_index: chosen_node,
         })
     }
 
