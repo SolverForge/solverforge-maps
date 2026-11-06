@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.3.0](https://github.com/SolverForge/solverforge-maps/compare/v2.2.0...v2.3.0) (2026-11-06)
+
+### Features
+
+* **routing:** street names are parsed from OSM ways and carried by graph edges; every route now reports its named street runs ([`streets`](https://docs.rs/solverforge-maps)). Consecutive edges on the same street merge into one run with its distance; unnamed road pieces are left out; partial first and last edges count only the traveled fraction. The road cache moves to version 7, so networks cached under the old rules are rebuilt.
+
+* **network:** `edges_with_names_iter()` exposes edges together with their street names; `from_test_data_named()` builds named synthetic networks for tests.
+
 ## [2.2.0](https://github.com/SolverForge/solverforge-maps/compare/v2.1.5...v2.2.0) (2026-11-06)
 
 ### Bug Fixes
