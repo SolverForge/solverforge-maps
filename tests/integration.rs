@@ -6,7 +6,7 @@ use std::time::Duration;
 use solverforge_maps::{
     decode_polyline, encode_polyline, haversine_distance, BBoxError, BoundingBox,
     ConnectivityPolicy, Coord, CoordError, NetworkConfig, Objective, RoadNetwork, RouteResult,
-    RoutingError, SpeedProfile, UNREACHABLE,
+    RoutingError, SpeedProfile, StreetRun, UNREACHABLE,
 };
 
 mod types {
@@ -355,6 +355,7 @@ mod routing {
                 duration_seconds: 100,
                 distance_meters: 1000.0,
                 geometry: vec![Coord::new(39.95, -75.16), Coord::new(39.96, -75.17)],
+                streets: Vec::new(),
             };
 
             let simplified = route.simplify(10.0);
@@ -369,6 +370,7 @@ mod routing {
                 duration_seconds: 100,
                 distance_meters: 1000.0,
                 geometry: vec![first, Coord::new(39.955, -75.165), last],
+                streets: Vec::new(),
             };
 
             let simplified = route.simplify(10000.0);
@@ -460,6 +462,75 @@ mod routing {
                 vec![from.snapped, Coord::new(0.0, 1.0), to.snapped]
             );
         }
+    }
+}
+
+mod streets {
+    use super::*;
+
+    #[test]
+    fn route_exposes_consecutive_named_street_runs() {
+        let network = RoadNetwork::from_test_data_named(
+            &[(0.0, 0.0), (0.0, 0.01), (0.0, 0.02), (0.0, 0.03)],
+            &[
+                (0, 1, 60.0, 1000.0, "Corso Como"),
+                (1, 2, 60.0, 1000.0, "Corso Como"),
+                (2, 3, 60.0, 1000.0, "Via Sarpri"),
+            ],
+        );
+
+        let route = network
+            .route(Coord::new(0.0, 0.0), Coord::new(0.0, 0.03))
+            .expect("named route should exist");
+
+        assert_eq!(
+            route.streets,
+            vec![
+                StreetRun {
+                    name: "Corso Como".into(),
+                    distance_m: 2000.0
+                },
+                StreetRun {
+                    name: "Via Sarpri".into(),
+                    distance_m: 1000.0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn route_runs_count_partial_edge_fractions() {
+        let network = RoadNetwork::from_test_data_named(
+            &[(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)],
+            &[
+                (0, 1, 100.0, 1000.0, "Strada Lunga"),
+                (1, 2, 200.0, 2000.0, "Via Breve"),
+            ],
+        );
+        let from = network
+            .snap_to_edge(Coord::new(0.0, 0.25))
+            .expect("Failed to snap start");
+        let to = network
+            .snap_to_edge(Coord::new(0.0, 1.5))
+            .expect("Failed to snap end");
+
+        let route = network
+            .route_edge_snapped(&from, &to)
+            .expect("Expected route across adjacent named edges");
+
+        assert_eq!(
+            route.streets,
+            vec![
+                StreetRun {
+                    name: "Strada Lunga".into(),
+                    distance_m: 750.0
+                },
+                StreetRun {
+                    name: "Via Breve".into(),
+                    distance_m: 1000.0
+                },
+            ]
+        );
     }
 }
 

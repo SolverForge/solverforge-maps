@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 use super::bbox::BoundingBox;
 use super::network::RoadNetwork;
 
-pub const CACHE_VERSION: u32 = 6;
+pub const CACHE_VERSION: u32 = 7;
 
 static NETWORK_CACHE: OnceLock<RwLock<HashMap<String, RoadNetwork>>> = OnceLock::new();
 static IN_FLIGHT_LOADS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
@@ -125,6 +125,7 @@ pub struct CachedEdge {
     pub to: usize,
     pub travel_time_s: f64,
     pub distance_m: f64,
+    pub name: Option<String>,
 }
 
 impl RoadNetwork {

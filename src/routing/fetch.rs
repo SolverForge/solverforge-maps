@@ -276,6 +276,7 @@ out body;"#,
                         let edge_data = EdgeData {
                             travel_time_s: travel_time,
                             distance_m: distance,
+                            name: tags.name.clone(),
                         };
 
                         match direction {
@@ -360,7 +361,13 @@ out body;"#,
         }
 
         for edge in &cached.edges {
-            network.add_edge_by_index(edge.from, edge.to, edge.travel_time_s, edge.distance_m);
+            network.add_edge_named_by_index(
+                edge.from,
+                edge.to,
+                edge.travel_time_s,
+                edge.distance_m,
+                edge.name.clone(),
+            );
         }
 
         let scc_count = network.strongly_connected_components();
@@ -401,12 +408,13 @@ out body;"#,
             .collect();
 
         let edges: Vec<CachedEdge> = self
-            .edges_iter()
-            .map(|(from, to, travel_time_s, distance_m)| CachedEdge {
+            .edges_with_names_iter()
+            .map(|(from, to, travel_time_s, distance_m, name)| CachedEdge {
                 from,
                 to,
                 travel_time_s,
                 distance_m,
+                name,
             })
             .collect();
 

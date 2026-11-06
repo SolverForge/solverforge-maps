@@ -187,6 +187,7 @@ async fn load_or_fetch_records_disk_hit_without_network_fetch() {
             to: 1,
             travel_time_s: 60.0,
             distance_m: 1_000.0,
+            name: Some("Main Street".into()),
         }],
     };
     let data = serde_json::to_string(&cached).expect("cached network should serialize");

@@ -27,6 +27,14 @@ impl NodeData {
 pub struct EdgeData {
     pub travel_time_s: f64,
     pub distance_m: f64,
+    pub name: Option<String>,
+}
+
+/// One named street along a route, with the distance covered on it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreetRun {
+    pub name: String,
+    pub distance_m: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,6 +42,32 @@ pub struct RouteResult {
     pub duration_seconds: i64,
     pub distance_meters: f64,
     pub geometry: Vec<Coord>,
+    /// Consecutive named streets along the route, longest-first order of
+    /// traversal. Unnamed road pieces are left out; partial first and last
+    /// edges count only the traveled fraction of their street.
+    pub streets: Vec<StreetRun>,
+}
+
+/// Merge a traversed sequence of (name, distance) pieces into runs.
+/// Unnamed pieces (no street tag) contribute nothing.
+pub(crate) fn merge_street_runs(
+    pieces: impl IntoIterator<Item = (Option<String>, f64)>,
+) -> Vec<StreetRun> {
+    let mut runs: Vec<StreetRun> = Vec::new();
+    for (name, distance) in pieces {
+        let Some(name) = name else { continue };
+        if distance <= 0.0 {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(last) if last.name == name => last.distance_m += distance,
+            _ => runs.push(StreetRun {
+                name,
+                distance_m: distance,
+            }),
+        }
+    }
+    runs
 }
 
 impl RouteResult {
@@ -118,18 +152,30 @@ impl RoadNetwork {
         self.graph.add_edge(from, to, data);
     }
 
-    pub(super) fn add_edge_by_index(
+    pub fn add_edge_by_index(
         &mut self,
         from: usize,
         to: usize,
         travel_time_s: f64,
         distance_m: f64,
     ) {
+        self.add_edge_named_by_index(from, to, travel_time_s, distance_m, None);
+    }
+
+    pub(super) fn add_edge_named_by_index(
+        &mut self,
+        from: usize,
+        to: usize,
+        travel_time_s: f64,
+        distance_m: f64,
+        name: Option<String>,
+    ) {
         let from_idx = NodeIdx::new(from);
         let to_idx = NodeIdx::new(to);
         let data = EdgeData {
             travel_time_s,
             distance_m,
+            name,
         };
         self.record_edge_speed(&data);
         self.graph.add_edge(from_idx, to_idx, data);
@@ -232,11 +278,19 @@ impl RoadNetwork {
     fn route_result_from_node_path(&self, path: &[NodeIdx], duration_seconds: i64) -> RouteResult {
         let geometry = self.node_path_geometry(path);
         let (distance, _) = self.node_path_metrics(path);
+        let pieces = path.windows(2).map(|window| {
+            self.graph
+                .find_edge(window[0], window[1])
+                .and_then(|edge| self.graph.edge_weight(edge))
+                .map(|weight| (weight.name.clone(), weight.distance_m))
+                .unwrap_or((None, 0.0))
+        });
 
         RouteResult {
             duration_seconds,
             distance_meters: distance,
             geometry,
+            streets: merge_street_runs(pieces),
         }
     }
 
@@ -247,7 +301,8 @@ impl RoadNetwork {
             .filter_map(|idx| self.graph.node_weight(idx).map(|n| (n.lat, n.lng)))
     }
 
-    /// Iterate over all edges as (from_idx, to_idx, travel_time_s, distance_m) tuples.
+    /// Iterate over all edges as (from_idx, to_idx, travel_time_s, distance_m)
+    /// tuples. Names are available through [`Self::edges_with_names_iter`].
     pub fn edges_iter(&self) -> impl Iterator<Item = (usize, usize, f64, f64)> + '_ {
         self.graph.edge_indices().filter_map(|idx| {
             let (from, to) = self.graph.edge_endpoints(idx)?;
@@ -257,6 +312,24 @@ impl RoadNetwork {
                 to.index(),
                 weight.travel_time_s,
                 weight.distance_m,
+            ))
+        })
+    }
+
+    /// Iterate over all edges with street names as
+    /// (from_idx, to_idx, travel_time_s, distance_m, name) tuples.
+    pub fn edges_with_names_iter(
+        &self,
+    ) -> impl Iterator<Item = (usize, usize, f64, f64, Option<String>)> + '_ {
+        self.graph.edge_indices().filter_map(|idx| {
+            let (from, to) = self.graph.edge_endpoints(idx)?;
+            let weight = self.graph.edge_weight(idx)?;
+            Some((
+                from.index(),
+                to.index(),
+                weight.travel_time_s,
+                weight.distance_m,
+                weight.name.clone(),
             ))
         })
     }
@@ -403,6 +476,10 @@ impl RoadNetwork {
                 duration_seconds: (segment_time * travel_fraction).round() as i64,
                 distance_meters: segment_dist * travel_fraction,
                 geometry: vec![from.snapped, to.snapped],
+                streets: merge_street_runs([(
+                    from_edge.name.clone(),
+                    segment_dist * travel_fraction,
+                )]),
             });
         }
 
@@ -444,11 +521,22 @@ impl RoadNetwork {
 
                 let (path_distance, _) = self.node_path_metrics(&path);
                 let distance = start_exit.distance_m + path_distance + end_entry.distance_m;
+                let mut pieces = Vec::new();
+                pieces.push((from_edge.name.clone(), start_exit.distance_m));
+                for window in path.windows(2) {
+                    if let Some(edge) = self.graph.find_edge(window[0], window[1]) {
+                        if let Some(weight) = self.graph.edge_weight(edge) {
+                            pieces.push((weight.name.clone(), weight.distance_m));
+                        }
+                    }
+                }
+                pieces.push((to_edge.name.clone(), end_entry.distance_m));
 
                 Ok(RouteResult {
                     duration_seconds: total_cost.round() as i64,
                     distance_meters: distance,
                     geometry,
+                    streets: merge_street_runs(pieces),
                 })
             }
             None => Err(RoutingError::NoPath {
@@ -473,6 +561,7 @@ impl RoadNetwork {
                 duration_seconds: 0,
                 distance_meters: 0.0,
                 geometry: vec![from.snapped, to.snapped],
+                streets: Vec::new(),
             });
         }
 
@@ -511,6 +600,7 @@ impl RoadNetwork {
                 duration_seconds: 0,
                 distance_meters: 0.0,
                 geometry: vec![start_snap.snapped, end_snap.snapped],
+                streets: Vec::new(),
             });
         }
 
@@ -538,6 +628,13 @@ impl RoadNetwork {
                     duration_seconds: time.round() as i64,
                     distance_meters: distance,
                     geometry: self.node_path_geometry(&path),
+                    streets: merge_street_runs(path.windows(2).map(|window| {
+                        self.graph
+                            .find_edge(window[0], window[1])
+                            .and_then(|edge| self.graph.edge_weight(edge))
+                            .map(|weight| (weight.name.clone(), weight.distance_m))
+                            .unwrap_or((None, 0.0))
+                    })),
                 })
             }
             None => Err(RoutingError::NoPath { from, to }),
@@ -609,6 +706,8 @@ impl RoadNetwork {
     /// * `nodes` - Slice of (lat, lng) tuples for each node
     /// * `edges` - Slice of (from_idx, to_idx, time_s, dist_m) tuples
     ///
+    /// For networks with street names use [`Self::from_test_data_named`].
+    ///
     /// # Example
     /// ```
     /// use solverforge_maps::RoadNetwork;
@@ -638,11 +737,50 @@ impl RoadNetwork {
 
         network
     }
+
+    /// Build a network from test data with named edges.
+    ///
+    /// # Arguments
+    /// * `nodes` - Slice of (lat, lng) tuples
+    /// * `edges` - Slice of (from_idx, to_idx, time_s, dist_m, name) tuples
+    ///
+    /// # Example
+    /// ```
+    /// use solverforge_maps::RoadNetwork;
+    ///
+    /// let nodes = &[(40.0, -75.0), (39.8, -75.2)];
+    /// let edges = &[(0, 1, 60.0, 1000.0, "Market Street")];
+    /// let network = RoadNetwork::from_test_data_named(nodes, edges);
+    ///
+    /// assert_eq!(network.edge_count(), 1);
+    /// ```
+    pub fn from_test_data_named(
+        nodes: &[(f64, f64)],
+        edges: &[(usize, usize, f64, f64, &str)],
+    ) -> Self {
+        let mut network = Self::new();
+
+        for &(lat, lng) in nodes {
+            network.add_node_at(lat, lng);
+        }
+
+        for &(from, to, time_s, dist_m, name) in edges {
+            network.add_edge_named_by_index(from, to, time_s, dist_m, Some(name.to_string()));
+        }
+
+        network.build_spatial_index();
+
+        network
+    }
 }
 
 #[cfg(test)]
 #[path = "network_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "network_name_tests.rs"]
+mod name_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Objective {

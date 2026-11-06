@@ -20,6 +20,7 @@ pub struct OsmElement {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct OsmTags {
+    pub name: Option<String>,
     pub highway: Option<String>,
     pub oneway: Option<String>,
     pub maxspeed: Option<String>,
