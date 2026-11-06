@@ -32,5 +32,6 @@ pub use geometry::{decode_polyline, encode_polyline, EncodedSegment};
 pub use routing::{
     haversine_distance, BBoxError, BoundingBox, CacheStats, ConnectivityPolicy, Coord, CoordError,
     NetworkConfig, NetworkRef, Objective, RoadNetwork, RouteResult, RoutingError, RoutingProgress,
-    RoutingResult, SnappedCoord, SpeedProfile, StreetRun, TravelTimeMatrix, UNREACHABLE,
+    RoutingResult, SnapAccess, SnappedCoord, SpeedProfile, StreetRun, TravelTimeMatrix,
+    UNREACHABLE,
 };
