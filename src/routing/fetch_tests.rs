@@ -11,7 +11,7 @@ use tokio::time::sleep;
 
 use super::*;
 use crate::routing::cache::{reset_cache_metrics, CacheStats};
-use crate::routing::BoundingBox;
+use crate::routing::{BoundingBox, SnapAccess};
 
 static FETCH_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -542,4 +542,83 @@ fn distinct_osm_nodes_at_one_position_stay_unconnected() {
     assert!(network
         .route(Coord::new(45.0, 9.0), Coord::new(45.001, 9.001))
         .is_err());
+}
+
+fn town_with_one_way_stub() -> RoadNetwork {
+    // A two-way through street (nodes 0-1-2) plus a stub node 3 that only
+    // drives out onto it: node 3 can leave the network but nothing can reach
+    // it, so itinerary that ends, or turns, there is infeasible.
+    RoadNetwork::from_test_data(
+        &[
+            (45.0, 9.0),
+            (45.0, 9.0005),
+            (45.0, 9.001),
+            (45.0004, 9.0004),
+        ],
+        &[
+            (0, 1, 60.0, 50.0),
+            (1, 0, 60.0, 50.0),
+            (1, 2, 60.0, 50.0),
+            (2, 1, 60.0, 50.0),
+            (3, 1, 60.0, 60.0),
+        ],
+    )
+}
+
+#[test]
+fn snapping_skips_a_one_directional_stub_for_a_routable_street() {
+    let network = town_with_one_way_stub();
+    let query = Coord::new(45.00045, 9.0004);
+    let snap = network
+        .snap_road_index_with_access(query, SnapAccess::Both)
+        .expect("snapping should succeed");
+    assert_eq!(snap.node_index.index(), 1, "stub node must be skipped");
+    assert!(
+        snap.snap_distance_m > 40.0,
+        "the routable street is farther"
+    );
+}
+
+#[test]
+fn snapping_honors_a_pure_start_that_only_leaves() {
+    // The stub can be left but never entered: as a pure start it is fine.
+    let network = town_with_one_way_stub();
+    let query = Coord::new(45.00045, 9.0004);
+    let snap = network
+        .snap_road_index_with_access(query, SnapAccess::Outgoing)
+        .expect("snapping should succeed");
+    assert_eq!(
+        snap.node_index.index(),
+        3,
+        "the stub itself works as a start"
+    );
+}
+
+#[test]
+fn snapping_stays_exact_when_every_node_is_routable() {
+    let network = RoadNetwork::from_test_data(
+        &[(45.0, 9.0), (45.0, 9.0005)],
+        &[(0, 1, 60.0, 50.0), (1, 0, 60.0, 50.0)],
+    );
+    let query = Coord::new(45.00001, 9.00051);
+    let snap = network
+        .snap_to_road_detailed(query)
+        .expect("snapping should succeed");
+    assert_eq!(snap.node_index.index(), 1, "the nearest node still wins");
+}
+
+#[tokio::test]
+async fn matrix_stays_feasible_when_a_stop_snaps_onto_a_stub() {
+    // Regression: a solve stranded the origin when its nearest node could be
+    // left but not entered; the whole itinerary then failed as infeasible.
+    let network = town_with_one_way_stub();
+    let matrix = network
+        .compute_matrix_with_access(
+            &[Coord::new(45.00045, 9.0004), Coord::new(45.0, 9.0002)],
+            &[SnapAccess::Both, SnapAccess::Both],
+            None,
+        )
+        .await;
+    assert!(matrix.is_reachable(0, 1));
+    assert!(matrix.is_reachable(1, 0));
 }

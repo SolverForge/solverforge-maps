@@ -118,6 +118,81 @@ impl<T> KdTree<T> {
             }
         }
     }
+    /// Find the nearest neighbors (ascending squared distance, at most `n`).
+    ///
+    /// Returns fewer when the tree holds fewer items; never prunes before the
+    /// result list is full, so the set is exact.
+    pub fn nearest_n_neighbors(&self, query: &Point2D, n: usize) -> Vec<(&T, f64)> {
+        if n == 0 {
+            return Vec::new();
+        }
+        let root = match self.root {
+            Some(root) => root,
+            None => return Vec::new(),
+        };
+        let mut best: Vec<(usize, f64)> = Vec::with_capacity(n);
+        self.search_nearest_n(root, query, 0, n, &mut best);
+        best.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        best.into_iter()
+            .map(|(idx, dist)| (&self.nodes[idx].data, dist))
+            .collect()
+    }
+
+    fn search_nearest_n(
+        &self,
+        node_idx: usize,
+        query: &Point2D,
+        depth: usize,
+        limit: usize,
+        best: &mut Vec<(usize, f64)>,
+    ) {
+        let node = &self.nodes[node_idx];
+        let dist = query.distance_squared(&node.point);
+
+        let insert_at = best
+            .binary_search_by(|probe| {
+                probe
+                    .1
+                    .partial_cmp(&dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or_else(|at| at);
+        if best.len() < limit || best.last().map(|(_, worst)| dist < *worst).unwrap_or(true) {
+            if best.len() < limit {
+                best.insert(insert_at, (node_idx, dist));
+            } else if let Some(at) = best.iter().position(|(_, worst)| dist < *worst) {
+                best.pop();
+                best.insert(at, (node_idx, dist));
+            }
+        }
+
+        let axis = depth % 2;
+        let query_val = if axis == 0 { query.x } else { query.y };
+        let node_val = if axis == 0 {
+            node.point.x
+        } else {
+            node.point.y
+        };
+        let diff = query_val - node_val;
+        let (first, second) = if diff <= 0.0 {
+            (node.left, node.right)
+        } else {
+            (node.right, node.left)
+        };
+
+        if let Some(child) = first {
+            self.search_nearest_n(child, query, depth + 1, limit, best);
+        }
+
+        let worst = best.last().map(|(_, worst)| *worst);
+        let unfilled = best.len() < limit;
+        let plane_dist = diff * diff;
+        if unfilled || worst.is_none_or(|worst_dist| plane_dist < worst_dist) {
+            if let Some(child) = second {
+                self.search_nearest_n(child, query, depth + 1, limit, best);
+            }
+        }
+    }
 }
 
 impl<T> Default for KdTree<T> {

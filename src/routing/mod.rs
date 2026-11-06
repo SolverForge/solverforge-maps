@@ -21,7 +21,7 @@ pub use config::{ConnectivityPolicy, NetworkConfig, SpeedProfile};
 pub use coord::Coord;
 pub use error::{BBoxError, CoordError, RoutingError};
 pub use matrix::{TravelTimeMatrix, UNREACHABLE};
-pub use network::{Objective, RoadNetwork, RouteResult, SnappedCoord, StreetRun};
+pub use network::{Objective, RoadNetwork, RouteResult, SnapAccess, SnappedCoord, StreetRun};
 pub use progress::RoutingProgress;
 
 pub use geo::haversine_distance;

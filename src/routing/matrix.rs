@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{self, Sender};
 use super::algo::dijkstra_with_secondary;
 use super::coord::Coord;
 use super::graph::NodeIdx;
-use super::network::{RoadNetwork, SnappedCoord};
+use super::network::{RoadNetwork, SnapAccess, SnappedCoord};
 use super::progress::RoutingProgress;
 
 pub const UNREACHABLE: i64 = i64::MAX;
@@ -203,15 +203,47 @@ impl RoadNetwork {
         locations: &[Coord],
         progress: Option<&Sender<RoutingProgress>>,
     ) -> TravelTimeMatrix {
-        let n = locations.len();
-        if n == 0 {
-            return TravelTimeMatrix::new(vec![], vec![], 0, vec![]);
-        }
-
         let node_snapped: Vec<Option<SnappedCoord>> = locations
             .iter()
             .map(|&coord| self.snap_to_road_detailed(coord).ok())
             .collect();
+        self.matrix_from_snaps(locations, node_snapped, progress)
+            .await
+    }
+
+    /// Travel-time matrix with per-location snapping access requirements.
+    ///
+    /// Each location snaps to the nearest node that an itinerary can traverse
+    /// in the required direction (`Both` for ordinary stops, `Outgoing` for a
+    /// pure start, `Incoming` for a pure end). When no candidate satisfies the
+    /// requirement, the plain nearest node is kept, which preserves the
+    /// unsnapped behavior on networks without fragments.
+    pub async fn compute_matrix_with_access(
+        &self,
+        locations: &[Coord],
+        access: &[SnapAccess],
+        progress: Option<&Sender<RoutingProgress>>,
+    ) -> TravelTimeMatrix {
+        debug_assert_eq!(locations.len(), access.len());
+        let node_snapped: Vec<Option<SnappedCoord>> = locations
+            .iter()
+            .zip(access.iter())
+            .map(|(&coord, &access)| self.snap_road_index_with_access(coord, access).ok())
+            .collect();
+        self.matrix_from_snaps(locations, node_snapped, progress)
+            .await
+    }
+
+    async fn matrix_from_snaps(
+        &self,
+        locations: &[Coord],
+        node_snapped: Vec<Option<SnappedCoord>>,
+        progress: Option<&Sender<RoutingProgress>>,
+    ) -> TravelTimeMatrix {
+        let n = locations.len();
+        if n == 0 {
+            return TravelTimeMatrix::new(vec![], vec![], 0, vec![]);
+        }
 
         let snapped_locations: Vec<SnappedCoord> = locations
             .iter()

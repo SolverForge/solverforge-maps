@@ -126,10 +126,36 @@ struct EdgeTraversal {
     distance_m: f64,
 }
 
+/// How an itinerary may traverse a snapped location.
+///
+/// The engine knows each point's role: an origin only needs to leave (`Outgoing`),
+/// a destination only needs to arrive (`Incoming`), and every intermediate stop
+/// needs both (`Both`). Snapping prefers a node that satisfies the requirement
+/// and keeps the plain nearest node when none does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapAccess {
+    Incoming,
+    Outgoing,
+    Both,
+}
+
+impl SnapAccess {
+    fn allows(&self, incoming: bool, outgoing: bool) -> bool {
+        match self {
+            SnapAccess::Incoming => incoming,
+            SnapAccess::Outgoing => outgoing,
+            SnapAccess::Both => incoming && outgoing,
+        }
+    }
+}
+
 pub struct RoadNetwork {
     pub(super) graph: DiGraph<NodeData, EdgeData>,
     spatial_index: Option<KdTree<SpatialPoint>>,
     edge_spatial_index: Option<SegmentIndex<SpatialSegment>>,
+    // Per node: whether an incoming and an outgoing edge exist, so access-aware
+    // snapping can refuse a node an itinerary could never traverse as required.
+    node_access: Option<(Vec<bool>, Vec<bool>)>,
     max_speed_mps: f64,
 }
 
@@ -139,6 +165,7 @@ impl RoadNetwork {
             graph: DiGraph::new(),
             spatial_index: None,
             edge_spatial_index: None,
+            node_access: None,
             max_speed_mps: 0.0,
         }
     }
@@ -222,6 +249,89 @@ impl RoadNetwork {
             .collect();
 
         self.edge_spatial_index = Some(SegmentIndex::bulk_load(segments));
+
+        // One pass over the edges records, per node, whether an incoming and
+        // an outgoing edge exist. The engine knows each point's role, so it
+        // can demand the directions its itinerary needs when snapping.
+        let node_count = self.graph.node_count();
+        if node_count > 0 {
+            let mut incoming = vec![false; node_count];
+            let mut outgoing = vec![false; node_count];
+            for (from, to) in self
+                .graph
+                .edge_indices()
+                .filter_map(|edge| self.graph.edge_endpoints(edge))
+            {
+                outgoing[from.index()] = true;
+                incoming[to.index()] = true;
+            }
+            self.node_access = Some((incoming, outgoing));
+        }
+    }
+
+    /// Whether the node satisfies the required traversal direction.
+    ///
+    /// Graphs without the pass treat every node as usable, which preserves
+    /// the plain nearest-node behavior.
+    fn allows_access(&self, node_index: NodeIdx, access: SnapAccess) -> bool {
+        match self.node_access.as_ref() {
+            Some((incoming, outgoing)) => {
+                let index = node_index.index();
+                access.allows(
+                    incoming.get(index).copied().unwrap_or(false),
+                    outgoing.get(index).copied().unwrap_or(false),
+                )
+            }
+            None => true,
+        }
+    }
+
+    /// Snap with an explicit traversal requirement (see `SnapAccess`).
+    ///
+    /// Among the nearest candidates the first node that satisfies the
+    /// requirement wins; when none does, the plain nearest node is returned.
+    pub fn snap_road_index_with_access(
+        &self,
+        coord: Coord,
+        access: SnapAccess,
+    ) -> Result<SnappedCoord, RoutingError> {
+        let tree = self
+            .spatial_index
+            .as_ref()
+            .ok_or(RoutingError::SnapFailed {
+                coord,
+                nearest_distance_m: None,
+            })?;
+
+        let query = Point2D::new(coord.lat, coord.lng);
+        const SNAP_CANDIDATES: usize = 64;
+        let candidates = tree.nearest_n_neighbors(&query, SNAP_CANDIDATES);
+        let chosen = candidates
+            .iter()
+            .find(|(candidate, _)| self.allows_access(candidate.node_index, access))
+            .or_else(|| candidates.first())
+            .ok_or(RoutingError::SnapFailed {
+                coord,
+                nearest_distance_m: None,
+            })?;
+
+        let node_data =
+            self.graph
+                .node_weight(chosen.0.node_index)
+                .ok_or(RoutingError::SnapFailed {
+                    coord,
+                    nearest_distance_m: None,
+                })?;
+
+        let snapped = Coord::new(node_data.lat, node_data.lng);
+        let snap_distance_m = haversine_distance(coord, snapped);
+
+        Ok(SnappedCoord {
+            original: coord,
+            snapped,
+            snap_distance_m,
+            node_index: chosen.0.node_index,
+        })
     }
 
     fn record_edge_speed(&mut self, edge: &EdgeData) {
@@ -430,8 +540,8 @@ impl RoadNetwork {
     /// The current implementation passes a zero heuristic to `astar`, so its
     /// behavior is equivalent to Dijkstra's algorithm.
     pub fn route(&self, from: Coord, to: Coord) -> Result<RouteResult, RoutingError> {
-        let start_snap = self.snap_to_road_detailed(from)?;
-        let end_snap = self.snap_to_road_detailed(to)?;
+        let start_snap = self.snap_road_index_with_access(from, SnapAccess::Outgoing)?;
+        let end_snap = self.snap_road_index_with_access(to, SnapAccess::Incoming)?;
 
         self.route_snapped(&start_snap, &end_snap)
     }

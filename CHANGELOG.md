@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.3.1](https://github.com/SolverForge/solverforge-maps/compare/v2.3.0...v2.3.1) (2026-11-06)
+
+### Bug Fixes
+
+* **routing:** a stop whose nearest graph node lies on a one-directional fragment no longer makes every ordering infeasible. `compute_matrix_with_access()` assigns each location the traversal directions its itinerary role requires (`Both` for a round trip's origin and stops, `Outgoing` for a pure start, `Incoming` for a stop the itinerary may finish at, `Incoming` for a fixed end), and snapping prefers the nearest node that satisfies them, keeping the plain nearest node when none does. Plain `compute_matrix()` and `snap_to_road_detailed()` keep their exact nearest behavior; `route()` now treats its start as leaving and its end as arriving.
+
+### Features
+
+* **routing:** `SnapAccess` and `RoadNetwork::snap_road_index_with_access()` expose the access-aware snapping; the road network records, per node, whether an incoming and an outgoing edge exist.
+
 ## [2.3.0](https://github.com/SolverForge/solverforge-maps/compare/v2.2.0...v2.3.0) (2026-11-06)
 
 ### Features
