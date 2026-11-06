@@ -1,12 +1,12 @@
 //! Road network graph core types and routing.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::algo::{astar, kosaraju_scc};
 use super::coord::Coord;
 use super::error::RoutingError;
-use super::geo::{coord_key, haversine_distance};
+use super::geo::haversine_distance;
 use super::graph::{DiGraph, EdgeIdx, NodeIdx};
 use super::spatial::{KdTree, Point2D, Segment, SegmentIndex};
 
@@ -94,7 +94,6 @@ struct EdgeTraversal {
 
 pub struct RoadNetwork {
     pub(super) graph: DiGraph<NodeData, EdgeData>,
-    pub(super) coord_to_node: HashMap<(i64, i64), NodeIdx>,
     spatial_index: Option<KdTree<SpatialPoint>>,
     edge_spatial_index: Option<SegmentIndex<SpatialSegment>>,
     max_speed_mps: f64,
@@ -104,29 +103,14 @@ impl RoadNetwork {
     pub fn new() -> Self {
         Self {
             graph: DiGraph::new(),
-            coord_to_node: HashMap::new(),
             spatial_index: None,
             edge_spatial_index: None,
             max_speed_mps: 0.0,
         }
     }
 
-    pub(super) fn get_or_create_node(&mut self, lat: f64, lng: f64) -> NodeIdx {
-        let key = coord_key(lat, lng);
-        if let Some(&idx) = self.coord_to_node.get(&key) {
-            idx
-        } else {
-            let idx = self.graph.add_node(NodeData { lat, lng });
-            self.coord_to_node.insert(key, idx);
-            idx
-        }
-    }
-
     pub(super) fn add_node_at(&mut self, lat: f64, lng: f64) -> NodeIdx {
-        let idx = self.graph.add_node(NodeData { lat, lng });
-        let key = coord_key(lat, lng);
-        self.coord_to_node.insert(key, idx);
-        idx
+        self.graph.add_node(NodeData { lat, lng })
     }
 
     pub(super) fn add_edge(&mut self, from: NodeIdx, to: NodeIdx, data: EdgeData) {
@@ -484,10 +468,11 @@ impl RoadNetwork {
         to: &SnappedCoord,
     ) -> Result<RouteResult, RoutingError> {
         if from.node_index == to.node_index {
+            // Stay on the network: a line between the raw points may cross land or water.
             return Ok(RouteResult {
                 duration_seconds: 0,
                 distance_meters: 0.0,
-                geometry: vec![from.original, to.original],
+                geometry: vec![from.snapped, to.snapped],
             });
         }
 
@@ -525,7 +510,7 @@ impl RoadNetwork {
             return Ok(RouteResult {
                 duration_seconds: 0,
                 distance_meters: 0.0,
-                geometry: vec![from, to],
+                geometry: vec![start_snap.snapped, end_snap.snapped],
             });
         }
 
@@ -607,18 +592,7 @@ impl RoadNetwork {
         // Retain only nodes in the largest SCC
         self.graph.retain_nodes(|n, _| largest_scc.contains(&n));
 
-        self.rebuild_coord_to_node();
         self.build_spatial_index();
-    }
-
-    fn rebuild_coord_to_node(&mut self) {
-        self.coord_to_node.clear();
-        for idx in self.graph.node_indices() {
-            if let Some(node) = self.graph.node_weight(idx) {
-                let key = coord_key(node.lat, node.lng);
-                self.coord_to_node.insert(key, idx);
-            }
-        }
     }
 }
 

@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use solverforge_maps::{
     decode_polyline, encode_polyline, haversine_distance, BBoxError, BoundingBox,
-    ConnectivityPolicy, Coord, CoordError, NetworkConfig, RoadNetwork, RouteResult, RoutingError,
-    SpeedProfile, UNREACHABLE,
+    ConnectivityPolicy, Coord, CoordError, NetworkConfig, Objective, RoadNetwork, RouteResult,
+    RoutingError, SpeedProfile, UNREACHABLE,
 };
 
 mod types {
@@ -194,6 +194,21 @@ mod types {
         }
 
         #[test]
+        fn default_roads_include_ramps() {
+            // Motorways and trunk roads are only reachable through their link roads.
+            let config = NetworkConfig::default();
+            for link in [
+                "motorway_link",
+                "trunk_link",
+                "primary_link",
+                "secondary_link",
+                "tertiary_link",
+            ] {
+                assert!(config.highway_types.contains(&link), "{link}");
+            }
+        }
+
+        #[test]
         fn default_connectivity_policy_keeps_all_components() {
             let config = NetworkConfig::default();
             assert_eq!(config.connectivity_policy, ConnectivityPolicy::KeepAll);
@@ -304,6 +319,30 @@ mod routing {
             assert_eq!(network.node_count(), 2);
             assert_eq!(network.edge_count(), 2);
             assert_eq!(network.strongly_connected_components(), 1);
+        }
+    }
+
+    mod same_node {
+        use super::*;
+
+        #[test]
+        fn route_between_points_snapping_to_one_node_stays_on_the_network() {
+            let network = RoadNetwork::from_test_data(
+                &[(0.0, 0.0), (0.0, 1.0)],
+                &[(0, 1, 100.0, 1000.0), (1, 0, 100.0, 1000.0)],
+            );
+            let node = Coord::new(0.0, 0.0);
+            for route in [
+                network.route(Coord::new(0.01, 0.0), Coord::new(-0.01, 0.0)),
+                network.route_with(
+                    Coord::new(0.01, 0.0),
+                    Coord::new(-0.01, 0.0),
+                    Objective::Time,
+                ),
+            ] {
+                // Never a straight line between the raw points, which may cross land or water.
+                assert_eq!(route.expect("same-node route").geometry, vec![node, node]);
+            }
         }
     }
 

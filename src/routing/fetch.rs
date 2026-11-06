@@ -19,8 +19,9 @@ use super::cache::{
 use super::config::{ConnectivityPolicy, NetworkConfig};
 use super::coord::Coord;
 use super::error::RoutingError;
+use super::graph::NodeIdx;
 use super::network::{EdgeData, RoadNetwork};
-use super::osm::OverpassResponse;
+use super::osm::{OsmTags, OverpassResponse, TravelDirection};
 use super::progress::RoutingProgress;
 
 /// Identifies this crate and release to Overpass servers, whose usage policy
@@ -228,18 +229,26 @@ out body;"#,
 
         info!("Parsed {} nodes", nodes.len());
 
+        // Graph nodes are OSM nodes. Two OSM nodes at the same position (a bridge
+        // over a road vertex) are not a junction and must not be joined.
+        let mut graph_nodes: HashMap<i64, NodeIdx> = HashMap::new();
+        let empty_tags = OsmTags::default();
         let mut way_count = 0;
         for elem in &osm.elements {
             if elem.elem_type == "way" {
                 if let Some(ref node_ids) = elem.nodes {
-                    let highway = elem.tags.as_ref().and_then(|t| t.highway.as_deref());
-                    let oneway = elem.tags.as_ref().and_then(|t| t.oneway.as_deref());
-                    let maxspeed = elem.tags.as_ref().and_then(|t| t.maxspeed.as_deref());
-                    let speed = config
-                        .speed_profile
-                        .speed_mps(maxspeed, highway.unwrap_or("residential"));
-                    let is_oneway_forward = matches!(oneway, Some("yes") | Some("1"));
-                    let is_oneway_reverse = matches!(oneway, Some("-1"));
+                    let tags = elem.tags.as_ref().unwrap_or(&empty_tags);
+                    if !tags.open_to_cars() {
+                        continue;
+                    }
+                    let direction = tags.travel_direction();
+                    if direction == TravelDirection::None {
+                        continue;
+                    }
+                    let speed = config.speed_profile.speed_mps(
+                        tags.maxspeed.as_deref(),
+                        tags.highway.as_deref().unwrap_or("residential"),
+                    );
 
                     for window in node_ids.windows(2) {
                         let n1_id = window[0];
@@ -252,8 +261,12 @@ out body;"#,
                             continue;
                         };
 
-                        let idx1 = network.get_or_create_node(lat1, lng1);
-                        let idx2 = network.get_or_create_node(lat2, lng2);
+                        let idx1 = *graph_nodes
+                            .entry(n1_id)
+                            .or_insert_with(|| network.add_node_at(lat1, lng1));
+                        let idx2 = *graph_nodes
+                            .entry(n2_id)
+                            .or_insert_with(|| network.add_node_at(lat2, lng2));
 
                         let coord1 = Coord::new(lat1, lng1);
                         let coord2 = Coord::new(lat2, lng2);
@@ -265,16 +278,14 @@ out body;"#,
                             distance_m: distance,
                         };
 
-                        if is_oneway_reverse {
-                            // oneway=-1 means traffic flows opposite to way direction
-                            network.add_edge(idx2, idx1, edge_data);
-                        } else {
-                            // Forward direction (always added unless reverse-only)
-                            network.add_edge(idx1, idx2, edge_data.clone());
-                            if !is_oneway_forward {
-                                // Bidirectional road
+                        match direction {
+                            TravelDirection::Forward => network.add_edge(idx1, idx2, edge_data),
+                            TravelDirection::Backward => network.add_edge(idx2, idx1, edge_data),
+                            TravelDirection::Both => {
+                                network.add_edge(idx1, idx2, edge_data.clone());
                                 network.add_edge(idx2, idx1, edge_data);
                             }
+                            TravelDirection::None => unreachable!("skipped above"),
                         }
                     }
 

@@ -118,12 +118,18 @@ impl Default for NetworkConfig {
             read_timeout: Duration::from_secs(180),
             speed_profile: SpeedProfile::default(),
             connectivity_policy: ConnectivityPolicy::KeepAll,
+            // Motorways and trunk roads are entered and left through their links.
             highway_types: vec![
                 "motorway",
+                "motorway_link",
                 "trunk",
+                "trunk_link",
                 "primary",
+                "primary_link",
                 "secondary",
+                "secondary_link",
                 "tertiary",
+                "tertiary_link",
                 "residential",
                 "unclassified",
                 "service",

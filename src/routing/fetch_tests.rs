@@ -443,3 +443,102 @@ async fn fetch_identifies_the_crate_release_in_the_user_agent() {
         "request should carry {expected:?}:\n{request}"
     );
 }
+
+fn build(json: &str) -> RoadNetwork {
+    let osm: OverpassResponse = serde_json::from_str(json).expect("fixture should parse");
+    RoadNetwork::build_from_osm(&osm, &NetworkConfig::default()).expect("graph should build")
+}
+
+/// Two nodes 1 -> 2 joined by one way carrying `tags`.
+fn single_way(tags: &str) -> RoadNetwork {
+    build(&format!(
+        r#"{{"elements": [
+            {{"type": "node", "id": 1, "lat": 45.0, "lon": 9.0}},
+            {{"type": "node", "id": 2, "lat": 45.0, "lon": 9.001}},
+            {{"type": "way", "id": 10, "nodes": [1, 2], "tags": {tags}}}
+        ]}}"#
+    ))
+}
+
+#[test]
+fn roundabouts_are_one_way_in_drawing_direction() {
+    let network = single_way(r#"{"highway": "primary", "junction": "roundabout"}"#);
+    assert_eq!(
+        network
+            .edges_iter()
+            .map(|(a, b, _, _)| (a, b))
+            .collect::<Vec<_>>(),
+        vec![(0, 1)]
+    );
+}
+
+#[test]
+fn motorways_are_implicitly_one_way_unless_tagged_otherwise() {
+    assert_eq!(single_way(r#"{"highway": "motorway"}"#).edge_count(), 1);
+    assert_eq!(
+        single_way(r#"{"highway": "motorway_link"}"#).edge_count(),
+        1
+    );
+    assert_eq!(
+        single_way(r#"{"highway": "motorway", "oneway": "no"}"#).edge_count(),
+        2
+    );
+}
+
+#[test]
+fn oneway_spellings_follow_osm() {
+    let edges = |tags| {
+        single_way(tags)
+            .edges_iter()
+            .map(|(a, b, _, _)| (a, b))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        edges(r#"{"highway": "residential", "oneway": "true"}"#),
+        vec![(0, 1)]
+    );
+    assert_eq!(
+        edges(r#"{"highway": "residential", "oneway": "-1"}"#),
+        vec![(1, 0)]
+    );
+    // Direction changes over time: no single direction can be promised.
+    assert!(edges(r#"{"highway": "residential", "oneway": "reversible"}"#).is_empty());
+}
+
+#[test]
+fn roads_closed_to_cars_are_not_driven() {
+    for closed in [
+        r#"{"highway": "service", "access": "private"}"#,
+        r#"{"highway": "residential", "access": "no"}"#,
+        r#"{"highway": "residential", "motor_vehicle": "no"}"#,
+        r#"{"highway": "track", "access": "agricultural"}"#,
+        r#"{"highway": "residential", "access": "yes", "motorcar": "no"}"#,
+    ] {
+        assert_eq!(single_way(closed).edge_count(), 0, "{closed}");
+    }
+    for open in [
+        r#"{"highway": "residential", "access": "destination"}"#,
+        r#"{"highway": "residential", "access": "no", "motor_vehicle": "yes"}"#,
+    ] {
+        assert_eq!(single_way(open).edge_count(), 2, "{open}");
+    }
+}
+
+#[test]
+fn distinct_osm_nodes_at_one_position_stay_unconnected() {
+    // A bridge passing exactly over a road vertex shares its position, not its node.
+    let network = build(
+        r#"{"elements": [
+            {"type": "node", "id": 1, "lat": 45.0, "lon": 9.0},
+            {"type": "node", "id": 2, "lat": 45.0, "lon": 9.001},
+            {"type": "node", "id": 3, "lat": 45.0, "lon": 9.001},
+            {"type": "node", "id": 4, "lat": 45.001, "lon": 9.001},
+            {"type": "way", "id": 10, "nodes": [1, 2], "tags": {"highway": "residential"}},
+            {"type": "way", "id": 11, "nodes": [3, 4], "tags": {"highway": "residential", "bridge": "yes"}}
+        ]}"#,
+    );
+    assert_eq!(network.node_count(), 4);
+    assert!(network
+        .route(Coord::new(45.0, 9.0), Coord::new(45.001, 9.001))
+        .is_err());
+}

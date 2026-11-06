@@ -2,10 +2,6 @@
 
 use super::coord::Coord;
 
-pub fn coord_key(lat: f64, lng: f64) -> (i64, i64) {
-    ((lat * 1e7).round() as i64, (lng * 1e7).round() as i64)
-}
-
 pub fn haversine_distance(a: Coord, b: Coord) -> f64 {
     const R: f64 = 6_371_000.0;
 
