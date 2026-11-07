@@ -23,6 +23,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref }}
 
       - name: Install Rust toolchain
         run: |
@@ -72,6 +74,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref }}
 
       - name: Get version
         id: version
@@ -96,10 +99,12 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: https://data.forgejo.org/actions/forgejo-release@v2.13.4
         with:
-          name: v${{ steps.version.outputs.version }}
-          body: |
+          direction: upload
+          tag: v${{ steps.version.outputs.version }}
+          title: v${{ steps.version.outputs.version }}
+          release-notes: |
             ## What's Changed
 
             ${{ steps.changelog.outputs.changelog }}
@@ -111,5 +116,5 @@ jobs:
             [dependencies]
             solverforge-maps = "${{ steps.version.outputs.version }}"
             ```
-          draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          skip-assets: true
