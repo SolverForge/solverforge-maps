@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [2.3.4](https://github.com/SolverForge/solverforge-maps/compare/v2.3.3...v2.3.4) (2026-11-18)
+
+### Bug Fixes
+
+* **routing:** `load_or_fetch()` serves an area that lies inside one already cached instead of downloading it again. The cache was keyed by the exact bounding box, so a smaller area (an itinerary that lost a stop) missed both caches and went back to Overpass even though every road it needs was saved. The in-memory cache and the file cache now fall back to the smallest cached area that covers the requested one; an area reaching past every cached one is still downloaded, and a covered area is not saved a second time. `BoundingBox::contains_bbox()` is public.
+
 ## [2.3.3](https://github.com/SolverForge/solverforge-maps/compare/v2.3.2...v2.3.3) (2026-11-06)
 
 ### Bug Fixes
