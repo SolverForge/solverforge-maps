@@ -180,7 +180,20 @@ impl RoadNetwork {
     }
 }
 
-fn parse_cache_key(key: &str) -> Option<BoundingBox> {
+/// The smallest cached area among `keys` that covers all of `bbox`: its roads serve any route
+/// inside it, so a smaller area inside one already loaded or saved needs no download.
+pub(crate) fn covering_key<'a>(
+    keys: impl IntoIterator<Item = &'a str>,
+    bbox: &BoundingBox,
+) -> Option<String> {
+    keys.into_iter()
+        .filter_map(|key| parse_cache_key(key).map(|area| (key, area)))
+        .filter(|(_, area)| area.contains_bbox(bbox))
+        .min_by(|(_, a), (_, b)| a.area().total_cmp(&b.area()))
+        .map(|(key, _)| key.to_string())
+}
+
+pub(crate) fn parse_cache_key(key: &str) -> Option<BoundingBox> {
     let parts: Vec<&str> = key.split('_').collect();
     if parts.len() != 4 {
         return None;

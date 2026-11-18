@@ -204,7 +204,8 @@ use solverforge_maps::{BoundingBox, NetworkConfig, RoadNetwork, NetworkRef};
 let bbox = BoundingBox::try_new(39.9, -75.2, 40.0, -75.1)?;
 let config = NetworkConfig::default();
 
-// Load from cache or fetch from API (returns cached reference)
+// Load from cache or fetch from API (returns cached reference). An area inside one
+// already cached, in memory or on disk, is served from it without a download.
 let network: NetworkRef = RoadNetwork::load_or_fetch(&bbox, &config, None).await?;
 
 // Always fetch fresh (bypasses cache)

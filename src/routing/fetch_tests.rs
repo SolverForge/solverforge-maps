@@ -215,6 +215,141 @@ async fn load_or_fetch_records_disk_hit_without_network_fetch() {
     let _ = tokio::fs::remove_dir_all(&cache_dir).await;
 }
 
+fn write_cached_network(dir: &std::path::Path, bbox: &BoundingBox) {
+    std::fs::create_dir_all(dir).expect("cache dir should be created");
+    let cached = CachedNetwork {
+        version: CACHE_VERSION,
+        nodes: vec![
+            CachedNode {
+                lat: bbox.min_lat,
+                lng: bbox.min_lng,
+            },
+            CachedNode {
+                lat: bbox.max_lat,
+                lng: bbox.max_lng,
+            },
+        ],
+        edges: vec![CachedEdge {
+            from: 0,
+            to: 1,
+            travel_time_s: 60.0,
+            distance_m: 1_000.0,
+            name: Some("Main Street".into()),
+        }],
+    };
+    let data = serde_json::to_string(&cached).expect("cached network should serialize");
+    std::fs::write(dir.join(format!("{}.json", bbox.cache_key())), data)
+        .expect("cache file should be written");
+}
+
+#[tokio::test]
+async fn load_or_fetch_serves_an_area_inside_a_saved_one_without_downloading() {
+    let _guard = fetch_test_lock().lock().await;
+    reset_test_state().await;
+
+    // A trip loses a stop: its area shrinks inside the one already saved.
+    let saved = BoundingBox::new(45.4454, 9.1617, 45.4934, 9.2150);
+    let smaller = BoundingBox::new(45.4592, 9.1654, 45.4908, 9.2113);
+    let cache_dir = unique_cache_dir("covering-disk");
+    write_cached_network(&cache_dir, &saved);
+    // Any download would hit this unreachable endpoint and fail the load.
+    let config = NetworkConfig::new()
+        .overpass_endpoints(vec!["http://127.0.0.1:9/api/interpreter".to_string()])
+        .cache_dir(&cache_dir)
+        .overpass_max_retries(0);
+
+    let network = RoadNetwork::load_or_fetch(&smaller, &config, None).await;
+    assert!(
+        network.is_ok(),
+        "the saved covering area should serve: {:?}",
+        network.err()
+    );
+    assert!(
+        !cache_dir
+            .join(format!("{}.json", smaller.cache_key()))
+            .exists(),
+        "a covered area is not saved again"
+    );
+
+    assert_cache_stats(CacheStats {
+        networks_cached: 1,
+        total_nodes: 0,
+        total_edges: 0,
+        memory_bytes: 0,
+        load_requests: 1,
+        memory_hits: 0,
+        disk_hits: 1,
+        network_fetches: 0,
+        in_flight_waits: 0,
+    })
+    .await;
+
+    let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+}
+
+#[tokio::test]
+async fn load_or_fetch_serves_an_area_inside_a_loaded_one_from_memory() {
+    let _guard = fetch_test_lock().lock().await;
+    reset_test_state().await;
+
+    let saved = BoundingBox::new(45.4454, 9.1617, 45.4934, 9.2150);
+    let smaller = BoundingBox::new(45.4592, 9.1654, 45.4908, 9.2113);
+    let cache_dir = unique_cache_dir("covering-memory");
+    write_cached_network(&cache_dir, &saved);
+    let config = NetworkConfig::new()
+        .overpass_endpoints(vec!["http://127.0.0.1:9/api/interpreter".to_string()])
+        .cache_dir(&cache_dir)
+        .overpass_max_retries(0);
+
+    RoadNetwork::load_or_fetch(&saved, &config, None)
+        .await
+        .expect("the saved area should load");
+    RoadNetwork::load_or_fetch(&smaller, &config, None)
+        .await
+        .expect("the loaded covering area should serve");
+
+    assert_cache_stats(CacheStats {
+        networks_cached: 1,
+        total_nodes: 0,
+        total_edges: 0,
+        memory_bytes: 0,
+        load_requests: 2,
+        memory_hits: 1,
+        disk_hits: 1,
+        network_fetches: 0,
+        in_flight_waits: 0,
+    })
+    .await;
+
+    let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+}
+
+#[tokio::test]
+async fn load_or_fetch_downloads_an_area_reaching_past_every_saved_one() {
+    let _guard = fetch_test_lock().lock().await;
+    reset_test_state().await;
+
+    // A trip gains a stop outside what is saved: its roads must be downloaded.
+    let saved = BoundingBox::new(39.95, -75.17, 39.96, -75.16);
+    let larger = BoundingBox::new(39.94, -75.17, 39.96, -75.16);
+    let cache_dir = unique_cache_dir("covering-larger");
+    write_cached_network(&cache_dir, &saved);
+    let (endpoint, requests, handle) =
+        spawn_overpass_server(vec![("200 OK", overpass_fixture_json())]);
+    let config = NetworkConfig::new()
+        .overpass_endpoints(vec![endpoint])
+        .cache_dir(&cache_dir)
+        .overpass_max_retries(0);
+
+    RoadNetwork::load_or_fetch(&larger, &config, None)
+        .await
+        .expect("the larger area should download");
+    handle.join().expect("server thread should finish");
+    assert_eq!(requests.load(Ordering::Relaxed), 1);
+
+    let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+}
+
 #[tokio::test]
 async fn load_or_fetch_records_waiter_for_same_key_contention() {
     let _guard = fetch_test_lock().lock().await;

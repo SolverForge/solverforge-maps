@@ -12,9 +12,9 @@ use tracing::{debug, info};
 
 use super::bbox::BoundingBox;
 use super::cache::{
-    cache, in_flight_loads, record_disk_hit, record_in_flight_wait, record_load_request,
-    record_memory_hit, record_network_fetch, CachedEdge, CachedNetwork, CachedNode, NetworkRef,
-    CACHE_VERSION,
+    cache, covering_key, in_flight_loads, record_disk_hit, record_in_flight_wait,
+    record_load_request, record_memory_hit, record_network_fetch, CachedEdge, CachedNetwork,
+    CachedNode, NetworkRef, CACHE_VERSION,
 };
 use super::config::{ConnectivityPolicy, NetworkConfig};
 use super::coord::Coord;
@@ -61,6 +61,20 @@ impl RoadNetwork {
                 }
                 return Ok(NetworkRef::new(cache_guard, cache_key));
             }
+            // A loaded network covering this whole area serves it as well.
+            if let Some(covering) = covering_key(cache_guard.keys().map(String::as_str), bbox) {
+                record_memory_hit();
+                info!(
+                    "Using in-memory road network {} covering {}",
+                    covering, cache_key
+                );
+                if let Some(tx) = progress {
+                    let _ = tx
+                        .send(RoutingProgress::CheckingCache { percent: 10 })
+                        .await;
+                }
+                return Ok(NetworkRef::new(cache_guard, covering));
+            }
         }
         if let Some(tx) = progress {
             let _ = tx.send(RoutingProgress::CheckingCache { percent: 5 }).await;
@@ -86,6 +100,27 @@ impl RoadNetwork {
                         return Ok(network);
                     }
                     Err(e) => info!("File cache invalid ({}), downloading fresh", e),
+                }
+            } else if let Some(covering) = Self::covering_file(&config.cache_dir, bbox).await {
+                // A saved network for a larger area holds every road of this one.
+                info!(
+                    "Loading road network from covering file cache: {:?}",
+                    covering
+                );
+                if let Some(tx) = progress {
+                    let _ = tx.send(RoutingProgress::CheckingCache { percent: 8 }).await;
+                }
+                match Self::load_from_file(&covering, config).await {
+                    Ok(network) => {
+                        record_disk_hit();
+                        if let Some(tx) = progress {
+                            let _ = tx
+                                .send(RoutingProgress::BuildingGraph { percent: 50 })
+                                .await;
+                        }
+                        return Ok(network);
+                    }
+                    Err(e) => info!("Covering file cache invalid ({}), downloading fresh", e),
                 }
             } else {
                 info!("Downloading road network from Overpass API");
@@ -331,6 +366,20 @@ out body;"#,
         network.build_spatial_index();
 
         Ok(network)
+    }
+
+    /// The smallest saved network in `dir` whose area covers all of `bbox`.
+    async fn covering_file(dir: &Path, bbox: &BoundingBox) -> Option<std::path::PathBuf> {
+        let mut entries = tokio::fs::read_dir(dir).await.ok()?;
+        let mut keys = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            if let Some(key) = name.to_str().and_then(|n| n.strip_suffix(".json")) {
+                keys.push(key.to_string());
+            }
+        }
+        covering_key(keys.iter().map(String::as_str), bbox)
+            .map(|key| dir.join(format!("{key}.json")))
     }
 
     async fn load_from_file(path: &Path, config: &NetworkConfig) -> Result<Self, RoutingError> {

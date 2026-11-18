@@ -201,6 +201,18 @@ impl BoundingBox {
             && coord.lng <= self.max_lng
     }
 
+    /// Whether `other` lies entirely inside this box, edges included.
+    pub fn contains_bbox(&self, other: &BoundingBox) -> bool {
+        other.min_lat >= self.min_lat
+            && other.max_lat <= self.max_lat
+            && other.min_lng >= self.min_lng
+            && other.max_lng <= self.max_lng
+    }
+
+    pub(crate) fn area(&self) -> f64 {
+        (self.max_lat - self.min_lat) * (self.max_lng - self.min_lng)
+    }
+
     pub(crate) fn cache_key(&self) -> String {
         format!(
             "{:.4}_{:.4}_{:.4}_{:.4}",
