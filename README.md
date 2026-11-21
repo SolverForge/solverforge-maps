@@ -9,6 +9,7 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 - **Shortest Path Routing**: Dijkstra-style shortest paths for time and distance objectives
 - **Travel Time Matrix**: Compute all-pairs travel times plus same-path route distances with parallel computation
 - **Slowdowns**: Slow chosen road classes, optionally inside an area, to measure travel at busy times of day
+- **Travel modes**: Car, bicycle or foot networks, each with its own paths, access and one-way rules, speed and cache
 - **Route Geometry**: Node-snapped and edge-snapped route geometries with Douglas-Peucker simplification
 - **Polyline Encoding**: Google Polyline Algorithm for efficient route transmission
 - **Input Validation**: Fail-fast coordinate and bounding box validation
@@ -347,6 +348,29 @@ The constant `UNREACHABLE` (`i64::MAX`) indicates pairs with no path.
 
 ---
 
+### Travel Modes
+
+`load_or_fetch` loads the network a car drives. `load_or_fetch_for` loads it
+for a `TravelMode`:
+
+```rust
+use solverforge_maps::{RoadNetwork, TravelMode};
+
+let bikes = RoadNetwork::load_or_fetch_for(&bbox, &config, TravelMode::Bicycle, None).await?;
+let walk = RoadNetwork::load_or_fetch_for(&bbox, &config, TravelMode::Foot, None).await?;
+```
+
+| Mode | Ways | One-way streets | Speed |
+|------|------|-----------------|-------|
+| `Car` | `NetworkConfig::highway_types`, open to cars | followed | `SpeedProfile` |
+| `Bicycle` | streets, tracks, paths and cycleways; footways and pedestrian streets where `bicycle=yes`/`designated`/`permissive`; closed by `bicycle`, `vehicle` or `access` | followed, unless `oneway:bicycle=no` | 15 km/h |
+| `Foot` | streets, tracks, paths, cycleways, footways, pedestrian streets and steps, never motorways or trunk roads; closed by `foot` or `access` | ignored | 5 km/h |
+
+Each mode is cached on its own: a bicycle or foot network's cache file carries
+`~bicycle` or `~foot` after the area, and an area is only ever served by a
+cached network of the same mode. `TravelMode::parse("foot")` and `as_str()`
+convert to and from configuration names.
+
 ### Slowdowns
 
 OpenStreetMap has no traffic data, so busy times are described as slowdowns:
@@ -603,6 +627,7 @@ match network.route(from, to) {
 | `RoutingProgress` | Progress reporting events |
 | `Objective` | Routing objective (Time, Distance) |
 | `RoadClass` | An edge's road class, from its OpenStreetMap `highway` tag |
+| `TravelMode` | How a network is travelled: car, bicycle or foot |
 
 ### Constants
 

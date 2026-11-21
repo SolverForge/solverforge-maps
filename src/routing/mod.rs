@@ -18,7 +18,7 @@ mod traffic;
 
 pub use bbox::BoundingBox;
 pub use cache::{CacheStats, NetworkRef};
-pub use config::{ConnectivityPolicy, NetworkConfig, RoadClass, SpeedProfile};
+pub use config::{ConnectivityPolicy, NetworkConfig, RoadClass, SpeedProfile, TravelMode};
 pub use coord::Coord;
 pub use error::{BBoxError, CoordError, RoutingError};
 pub use matrix::{TravelTimeMatrix, UNREACHABLE};

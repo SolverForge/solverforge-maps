@@ -33,5 +33,5 @@ pub use routing::{
     haversine_distance, BBoxError, BoundingBox, CacheStats, ConnectivityPolicy, Coord, CoordError,
     NetworkConfig, NetworkRef, Objective, RoadClass, RoadNetwork, RouteResult, RoutingError,
     RoutingProgress, RoutingResult, Slowdown, SlowdownError, SnapAccess, SnappedCoord,
-    SpeedProfile, StreetRun, TravelTimeMatrix, UNREACHABLE,
+    SpeedProfile, StreetRun, TravelMode, TravelTimeMatrix, UNREACHABLE,
 };

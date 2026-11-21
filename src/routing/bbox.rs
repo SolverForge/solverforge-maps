@@ -213,6 +213,15 @@ impl BoundingBox {
         (self.max_lat - self.min_lat) * (self.max_lng - self.min_lng)
     }
 
+    /// The cache key of this area travelled in `mode`: the car's key is the
+    /// bare area, every other mode's carries its name after a `~`.
+    pub(crate) fn mode_key(&self, mode: super::config::TravelMode) -> String {
+        match mode {
+            super::config::TravelMode::Car => self.cache_key(),
+            other => format!("{}~{}", self.cache_key(), other.as_str()),
+        }
+    }
+
     pub(crate) fn cache_key(&self) -> String {
         format!(
             "{:.4}_{:.4}_{:.4}_{:.4}",

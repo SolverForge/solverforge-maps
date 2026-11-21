@@ -2,6 +2,8 @@
 
 use serde::Deserialize;
 
+use super::config::TravelMode;
+
 #[derive(Debug, Deserialize)]
 pub struct OverpassResponse {
     pub elements: Vec<OsmElement>,
@@ -29,6 +31,10 @@ pub struct OsmTags {
     pub vehicle: Option<String>,
     pub motor_vehicle: Option<String>,
     pub motorcar: Option<String>,
+    pub bicycle: Option<String>,
+    pub foot: Option<String>,
+    #[serde(rename = "oneway:bicycle")]
+    pub oneway_bicycle: Option<String>,
 }
 
 /// Directions in which a car may travel along a way, relative to its node order.
@@ -66,6 +72,54 @@ impl OsmTags {
         .into_iter()
         .find_map(|tag| tag.as_deref());
         !decisive.is_some_and(|value| CLOSED_TO_CARS.contains(&value))
+    }
+
+    /// Whether a traveller in `mode` may use the way. A bicycle follows its
+    /// `bicycle`, `vehicle` and `access` tags and rides a footway or pedestrian
+    /// street only where `bicycle` allows it; a walker follows `foot` and
+    /// `access` and never walks a motorway or trunk road.
+    pub fn open_to(&self, mode: TravelMode) -> bool {
+        let allows = |tag: &Option<String>| {
+            matches!(tag.as_deref(), Some("yes" | "designated" | "permissive"))
+        };
+        let closed = |tags: &[&Option<String>]| {
+            tags.iter()
+                .find_map(|tag| tag.as_deref())
+                .is_some_and(|value| CLOSED_TO_CARS.contains(&value))
+        };
+        let highway = self.highway.as_deref().unwrap_or("");
+        match mode {
+            TravelMode::Car => self.open_to_cars(),
+            TravelMode::Bicycle => {
+                if matches!(highway, "footway" | "pedestrian") && !allows(&self.bicycle) {
+                    return false;
+                }
+                !closed(&[&self.bicycle, &self.vehicle, &self.access])
+            }
+            TravelMode::Foot => {
+                !highway.starts_with("motorway")
+                    && !highway.starts_with("trunk")
+                    && !closed(&[&self.foot, &self.access])
+            }
+        }
+    }
+
+    /// Directions a traveller in `mode` may follow the way: a walker either
+    /// way; a bicycle as cars do, unless `oneway:bicycle=no` opens the way
+    /// against the traffic.
+    pub fn travel_direction_for(&self, mode: TravelMode) -> TravelDirection {
+        match mode {
+            TravelMode::Car => self.travel_direction(),
+            TravelMode::Foot => TravelDirection::Both,
+            TravelMode::Bicycle => match self.oneway_bicycle.as_deref() {
+                Some("no" | "false" | "0") => TravelDirection::Both,
+                _ => match self.travel_direction() {
+                    // A reversible car lane is still ridden, in both directions.
+                    TravelDirection::None => TravelDirection::Both,
+                    direction => direction,
+                },
+            },
+        }
     }
 
     pub fn travel_direction(&self) -> TravelDirection {

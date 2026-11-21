@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 use super::bbox::BoundingBox;
-use super::config::RoadClass;
+use super::config::{RoadClass, TravelMode};
 use super::network::RoadNetwork;
 
 pub const CACHE_VERSION: u32 = 8;
@@ -187,16 +187,27 @@ impl RoadNetwork {
 pub(crate) fn covering_key<'a>(
     keys: impl IntoIterator<Item = &'a str>,
     bbox: &BoundingBox,
+    mode: TravelMode,
 ) -> Option<String> {
     keys.into_iter()
+        .filter(|key| key_mode(key) == Some(mode))
         .filter_map(|key| parse_cache_key(key).map(|area| (key, area)))
         .filter(|(_, area)| area.contains_bbox(bbox))
         .min_by(|(_, a), (_, b)| a.area().total_cmp(&b.area()))
         .map(|(key, _)| key.to_string())
 }
 
+/// The travel mode a cache key was saved for.
+fn key_mode(key: &str) -> Option<TravelMode> {
+    match key.split_once('~') {
+        None => Some(TravelMode::Car),
+        Some((_, mode)) => TravelMode::parse(mode),
+    }
+}
+
 pub(crate) fn parse_cache_key(key: &str) -> Option<BoundingBox> {
-    let parts: Vec<&str> = key.split('_').collect();
+    let area = key.split_once('~').map_or(key, |(area, _)| area);
+    let parts: Vec<&str> = area.split('_').collect();
     if parts.len() != 4 {
         return None;
     }

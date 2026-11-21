@@ -16,7 +16,7 @@ use super::cache::{
     record_load_request, record_memory_hit, record_network_fetch, CachedEdge, CachedNetwork,
     CachedNode, NetworkRef, CACHE_VERSION,
 };
-use super::config::{ConnectivityPolicy, NetworkConfig, RoadClass};
+use super::config::{ConnectivityPolicy, NetworkConfig, RoadClass, TravelMode};
 use super::coord::Coord;
 use super::error::RoutingError;
 use super::graph::NodeIdx;
@@ -42,7 +42,19 @@ impl RoadNetwork {
         config: &NetworkConfig,
         progress: Option<&Sender<RoutingProgress>>,
     ) -> Result<NetworkRef, RoutingError> {
-        let cache_key = bbox.cache_key();
+        Self::load_or_fetch_for(bbox, config, TravelMode::Car, progress).await
+    }
+
+    /// The network of `bbox` travelled in `mode`: its own roads and paths,
+    /// access and one-way rules and speed, cached apart from every other mode.
+    /// [`RoadNetwork::load_or_fetch`] is the car's.
+    pub async fn load_or_fetch_for(
+        bbox: &BoundingBox,
+        config: &NetworkConfig,
+        mode: TravelMode,
+        progress: Option<&Sender<RoutingProgress>>,
+    ) -> Result<NetworkRef, RoutingError> {
+        let cache_key = bbox.mode_key(mode);
         record_load_request();
 
         if let Some(tx) = progress {
@@ -62,7 +74,8 @@ impl RoadNetwork {
                 return Ok(NetworkRef::new(cache_guard, cache_key));
             }
             // A loaded network covering this whole area serves it as well.
-            if let Some(covering) = covering_key(cache_guard.keys().map(String::as_str), bbox) {
+            if let Some(covering) = covering_key(cache_guard.keys().map(String::as_str), bbox, mode)
+            {
                 record_memory_hit();
                 info!(
                     "Using in-memory road network {} covering {}",
@@ -82,7 +95,9 @@ impl RoadNetwork {
 
         Self::load_or_insert(cache_key, async {
             tokio::fs::create_dir_all(&config.cache_dir).await?;
-            let cache_path = config.cache_dir.join(format!("{}.json", bbox.cache_key()));
+            let cache_path = config
+                .cache_dir
+                .join(format!("{}.json", bbox.mode_key(mode)));
 
             if tokio::fs::try_exists(&cache_path).await.unwrap_or(false) {
                 info!("Loading road network from file cache: {:?}", cache_path);
@@ -101,7 +116,8 @@ impl RoadNetwork {
                     }
                     Err(e) => info!("File cache invalid ({}), downloading fresh", e),
                 }
-            } else if let Some(covering) = Self::covering_file(&config.cache_dir, bbox).await {
+            } else if let Some(covering) = Self::covering_file(&config.cache_dir, bbox, mode).await
+            {
                 // A saved network for a larger area holds every road of this one.
                 info!(
                     "Loading road network from covering file cache: {:?}",
@@ -127,7 +143,7 @@ impl RoadNetwork {
             }
 
             record_network_fetch();
-            let network = Self::fetch_from_api(bbox, config, progress).await?;
+            let network = Self::fetch_from_api(bbox, config, mode, progress).await?;
             network.save_to_file(&cache_path).await?;
             info!("Saved road network to file cache: {:?}", cache_path);
             Ok(network)
@@ -140,15 +156,19 @@ impl RoadNetwork {
         config: &NetworkConfig,
         progress: Option<&Sender<RoutingProgress>>,
     ) -> Result<Self, RoutingError> {
-        Self::fetch_from_api(bbox, config, progress).await
+        Self::fetch_from_api(bbox, config, TravelMode::Car, progress).await
     }
 
     async fn fetch_from_api(
         bbox: &BoundingBox,
         config: &NetworkConfig,
+        mode: TravelMode,
         progress: Option<&Sender<RoutingProgress>>,
     ) -> Result<Self, RoutingError> {
-        let highway_regex = config.highway_regex();
+        let highway_regex = match mode.highway_types() {
+            Some(types) => format!("^({})$", types.join("|")),
+            None => config.highway_regex(),
+        };
         let query = format!(
             r#"[out:json][timeout:120];
 (
@@ -235,7 +255,7 @@ out body;"#,
                 .await;
         }
 
-        let network = Self::build_from_osm(&osm_data, config)?;
+        let network = Self::build_from_osm_for(&osm_data, config, mode)?;
 
         if let Some(tx) = progress {
             let _ = tx
@@ -247,9 +267,18 @@ out body;"#,
         Ok(network)
     }
 
+    #[cfg(test)]
     pub(super) fn build_from_osm(
         osm: &OverpassResponse,
         config: &NetworkConfig,
+    ) -> Result<Self, RoutingError> {
+        Self::build_from_osm_for(osm, config, TravelMode::Car)
+    }
+
+    pub(super) fn build_from_osm_for(
+        osm: &OverpassResponse,
+        config: &NetworkConfig,
+        mode: TravelMode,
     ) -> Result<Self, RoutingError> {
         let mut network = Self::new();
 
@@ -273,17 +302,19 @@ out body;"#,
             if elem.elem_type == "way" {
                 if let Some(ref node_ids) = elem.nodes {
                     let tags = elem.tags.as_ref().unwrap_or(&empty_tags);
-                    if !tags.open_to_cars() {
+                    if !tags.open_to(mode) {
                         continue;
                     }
-                    let direction = tags.travel_direction();
+                    let direction = tags.travel_direction_for(mode);
                     if direction == TravelDirection::None {
                         continue;
                     }
                     let highway = tags.highway.as_deref().unwrap_or("residential");
-                    let speed = config
-                        .speed_profile
-                        .speed_mps(tags.maxspeed.as_deref(), highway);
+                    let speed = mode.speed_mps().unwrap_or_else(|| {
+                        config
+                            .speed_profile
+                            .speed_mps(tags.maxspeed.as_deref(), highway)
+                    });
                     let road_class = RoadClass::from_highway(highway);
 
                     for window in node_ids.windows(2) {
@@ -371,7 +402,11 @@ out body;"#,
     }
 
     /// The smallest saved network in `dir` whose area covers all of `bbox`.
-    async fn covering_file(dir: &Path, bbox: &BoundingBox) -> Option<std::path::PathBuf> {
+    async fn covering_file(
+        dir: &Path,
+        bbox: &BoundingBox,
+        mode: TravelMode,
+    ) -> Option<std::path::PathBuf> {
         let mut entries = tokio::fs::read_dir(dir).await.ok()?;
         let mut keys = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -380,7 +415,7 @@ out body;"#,
                 keys.push(key.to_string());
             }
         }
-        covering_key(keys.iter().map(String::as_str), bbox)
+        covering_key(keys.iter().map(String::as_str), bbox, mode)
             .map(|key| dir.join(format!("{key}.json")))
     }
 

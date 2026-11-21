@@ -84,6 +84,75 @@ impl RoadClass {
     }
 }
 
+/// How a network is travelled: by car (the default), by bicycle or on foot.
+/// Each mode reads its own roads and paths from OpenStreetMap, follows its
+/// own access and one-way rules, and is cached on its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TravelMode {
+    #[default]
+    Car,
+    Bicycle,
+    Foot,
+}
+
+impl TravelMode {
+    /// Every mode.
+    pub const ALL: [TravelMode; 3] = [TravelMode::Car, TravelMode::Bicycle, TravelMode::Foot];
+
+    /// The mode's name as written in configuration: `car`, `bicycle`, `foot`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TravelMode::Car => "car",
+            TravelMode::Bicycle => "bicycle",
+            TravelMode::Foot => "foot",
+        }
+    }
+
+    /// The mode named `name` ([`TravelMode::as_str`]), if any.
+    pub fn parse(name: &str) -> Option<Self> {
+        TravelMode::ALL
+            .into_iter()
+            .find(|mode| mode.as_str() == name)
+    }
+
+    /// The `highway` values a bicycle or a walker may use. A car uses
+    /// [`NetworkConfig::highway_types`].
+    pub fn highway_types(self) -> Option<Vec<&'static str>> {
+        let streets = [
+            "primary",
+            "primary_link",
+            "secondary",
+            "secondary_link",
+            "tertiary",
+            "tertiary_link",
+            "residential",
+            "unclassified",
+            "service",
+            "living_street",
+            "track",
+            "path",
+            "cycleway",
+            "pedestrian",
+            "footway",
+        ];
+        match self {
+            TravelMode::Car => None,
+            TravelMode::Bicycle => Some(streets.to_vec()),
+            TravelMode::Foot => Some(streets.into_iter().chain(["steps"]).collect()),
+        }
+    }
+
+    /// Travel speed in m/s off a car: 15 km/h by bicycle, 5 km/h on foot.
+    pub fn speed_mps(self) -> Option<f64> {
+        match self {
+            TravelMode::Car => None,
+            TravelMode::Bicycle => Some(15.0 / 3.6),
+            TravelMode::Foot => Some(5.0 / 3.6),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SpeedProfile {
     pub motorway: f64,

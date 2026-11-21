@@ -838,3 +838,81 @@ async fn matrix_stays_feasible_when_a_stop_snaps_onto_a_stub() {
     assert!(matrix.is_reachable(0, 1));
     assert!(matrix.is_reachable(1, 0));
 }
+
+fn build_for(json: &str, mode: TravelMode) -> RoadNetwork {
+    let osm: OverpassResponse = serde_json::from_str(json).expect("fixture should parse");
+    RoadNetwork::build_from_osm_for(&osm, &NetworkConfig::default(), mode)
+        .expect("graph should build")
+}
+
+fn way_for(tags: &str, mode: TravelMode) -> RoadNetwork {
+    build_for(
+        &format!(
+            r#"{{"elements": [
+                {{"type": "node", "id": 1, "lat": 45.0, "lon": 9.0}},
+                {{"type": "node", "id": 2, "lat": 45.0, "lon": 9.001}},
+                {{"type": "way", "id": 10, "nodes": [1, 2], "tags": {tags}}}
+            ]}}"#
+        ),
+        mode,
+    )
+}
+
+#[test]
+fn each_mode_uses_the_ways_open_to_it() {
+    let footway = r#"{"highway": "footway"}"#;
+    assert_eq!(way_for(footway, TravelMode::Foot).edge_count(), 2);
+    assert_eq!(way_for(footway, TravelMode::Bicycle).edge_count(), 0);
+    let shared = r#"{"highway": "footway", "bicycle": "yes"}"#;
+    assert_eq!(way_for(shared, TravelMode::Bicycle).edge_count(), 2);
+    let motorway = r#"{"highway": "motorway"}"#;
+    assert_eq!(way_for(motorway, TravelMode::Foot).edge_count(), 0);
+    let no_bikes = r#"{"highway": "primary", "bicycle": "no"}"#;
+    assert_eq!(way_for(no_bikes, TravelMode::Bicycle).edge_count(), 0);
+    assert_eq!(way_for(no_bikes, TravelMode::Car).edge_count(), 2);
+}
+
+#[test]
+fn walkers_ignore_one_way_streets_and_bicycles_follow_their_own_tag() {
+    let one_way = r#"{"highway": "residential", "oneway": "yes"}"#;
+    assert_eq!(way_for(one_way, TravelMode::Car).edge_count(), 1);
+    assert_eq!(way_for(one_way, TravelMode::Bicycle).edge_count(), 1);
+    assert_eq!(way_for(one_way, TravelMode::Foot).edge_count(), 2);
+    let contraflow = r#"{"highway": "residential", "oneway": "yes", "oneway:bicycle": "no"}"#;
+    assert_eq!(way_for(contraflow, TravelMode::Bicycle).edge_count(), 2);
+}
+
+#[test]
+fn bicycles_and_walkers_travel_at_their_own_speed() {
+    let street = r#"{"highway": "primary", "maxspeed": "50"}"#;
+    let speed = |network: RoadNetwork| {
+        let (_, _, seconds, meters) = network.edges_iter().next().expect("an edge");
+        meters / seconds * 3.6
+    };
+    assert!((speed(way_for(street, TravelMode::Car)) - 50.0).abs() < 1e-6);
+    assert!((speed(way_for(street, TravelMode::Bicycle)) - 15.0).abs() < 1e-6);
+    assert!((speed(way_for(street, TravelMode::Foot)) - 5.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_mode_is_served_only_by_its_own_cached_areas() {
+    let bbox = BoundingBox::new(45.0, 9.0, 45.1, 9.1);
+    let keys = [
+        "44.0000_8.0000_46.0000_10.0000",
+        "44.0000_8.0000_46.0000_10.0000~foot",
+    ];
+    assert_eq!(
+        covering_key(keys, &bbox, TravelMode::Car).as_deref(),
+        Some(keys[0])
+    );
+    assert_eq!(
+        covering_key(keys, &bbox, TravelMode::Foot).as_deref(),
+        Some(keys[1])
+    );
+    assert_eq!(covering_key(keys, &bbox, TravelMode::Bicycle), None);
+    assert_eq!(bbox.mode_key(TravelMode::Car), bbox.cache_key());
+    assert_eq!(
+        bbox.mode_key(TravelMode::Bicycle),
+        format!("{}~bicycle", bbox.cache_key())
+    );
+}
