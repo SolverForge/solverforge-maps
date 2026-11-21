@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [2.5.0](https://github.com/SolverForge/solverforge-maps/compare/v2.4.0...v2.5.0) (2026-11-21)
+
+
+### Features
+
+* **routing:** bicycle and foot networks ([d96bc4f](https://github.com/SolverForge/solverforge-maps/commit/d96bc4f531ab7e16e7971438817e44079bbd7432))
+
+
 ## [2.4.0](https://github.com/SolverForge/solverforge-maps/compare/v2.3.4...v2.4.0) (2026-11-21)
 
 
