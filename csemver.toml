@@ -1,0 +1,45 @@
+# Release configuration for csemver, replacing commit-and-tag-version, which
+# bumped only CHANGELOG.md and left Cargo.toml and Cargo.lock to be edited by hand.
+#
+# `make bump-patch|minor|major` runs csemver: it moves the crate version in
+# Cargo.toml and the crate's own block in Cargo.lock, writes the CHANGELOG.md
+# entry, commits it as `chore(release): vX.Y.Z` and creates the annotated
+# `vX.Y.Z` tag. It does not push; publish-crates.yml publishes the tag.
+#
+# Keep every top-level key above the first [[...]] table header: TOML scopes
+# later keys into that table.
+tagPrefix = "v"
+suppressRevertPairs = true
+releaseCommitMessageFormat = "chore(release): {{currentTag}}"
+commitUrlFormat = "https://github.com/SolverForge/solverforge-maps/commit/{{hash}}"
+compareUrlFormat = "https://github.com/SolverForge/solverforge-maps/compare/{{previousTag}}...{{currentTag}}"
+issueUrlFormat = "https://github.com/SolverForge/solverforge-maps/issues/{{id}}"
+
+types = [
+  { type = "feat", section = "Features" },
+  { type = "fix", section = "Bug Fixes" },
+  { type = "perf", section = "Performance Improvements" },
+  { type = "refactor", section = "Code Refactoring" },
+  { type = "chore", effect = "hidden" },
+  { type = "docs", effect = "hidden" },
+  { type = "style", effect = "hidden" },
+  { type = "test", effect = "hidden" },
+  { type = "build", effect = "hidden" },
+  { type = "ci", effect = "hidden" },
+]
+
+packageFiles = [
+  { filename = "Cargo.toml", type = "regex", pattern = '^version = "([0-9]+\.[0-9]+\.[0-9]+)"', versionGroup = 1 },
+]
+
+[[bumpFiles]]
+filename = "Cargo.toml"
+type = "regex"
+pattern = '^version = "([0-9]+\.[0-9]+\.[0-9]+)"'
+versionGroup = 1
+
+[[bumpFiles]]
+filename = "Cargo.lock"
+type = "regex"
+pattern = '^name = "solverforge-maps"$[[:space:]]^version = "([0-9]+\.[0-9]+\.[0-9]+)"'
+versionGroup = 1
