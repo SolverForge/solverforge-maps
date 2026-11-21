@@ -14,15 +14,17 @@ mod network;
 mod osm;
 mod progress;
 mod spatial;
+mod traffic;
 
 pub use bbox::BoundingBox;
 pub use cache::{CacheStats, NetworkRef};
-pub use config::{ConnectivityPolicy, NetworkConfig, SpeedProfile};
+pub use config::{ConnectivityPolicy, NetworkConfig, RoadClass, SpeedProfile};
 pub use coord::Coord;
 pub use error::{BBoxError, CoordError, RoutingError};
 pub use matrix::{TravelTimeMatrix, UNREACHABLE};
 pub use network::{Objective, RoadNetwork, RouteResult, SnapAccess, SnappedCoord, StreetRun};
 pub use progress::RoutingProgress;
+pub use traffic::{Slowdown, SlowdownError};
 
 pub use geo::haversine_distance;
 

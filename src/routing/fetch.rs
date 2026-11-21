@@ -16,7 +16,7 @@ use super::cache::{
     record_load_request, record_memory_hit, record_network_fetch, CachedEdge, CachedNetwork,
     CachedNode, NetworkRef, CACHE_VERSION,
 };
-use super::config::{ConnectivityPolicy, NetworkConfig};
+use super::config::{ConnectivityPolicy, NetworkConfig, RoadClass};
 use super::coord::Coord;
 use super::error::RoutingError;
 use super::graph::NodeIdx;
@@ -280,10 +280,11 @@ out body;"#,
                     if direction == TravelDirection::None {
                         continue;
                     }
-                    let speed = config.speed_profile.speed_mps(
-                        tags.maxspeed.as_deref(),
-                        tags.highway.as_deref().unwrap_or("residential"),
-                    );
+                    let highway = tags.highway.as_deref().unwrap_or("residential");
+                    let speed = config
+                        .speed_profile
+                        .speed_mps(tags.maxspeed.as_deref(), highway);
+                    let road_class = RoadClass::from_highway(highway);
 
                     for window in node_ids.windows(2) {
                         let n1_id = window[0];
@@ -312,6 +313,7 @@ out body;"#,
                             travel_time_s: travel_time,
                             distance_m: distance,
                             name: tags.name.clone(),
+                            road_class,
                         };
 
                         match direction {
@@ -416,6 +418,7 @@ out body;"#,
                 edge.travel_time_s,
                 edge.distance_m,
                 edge.name.clone(),
+                edge.road_class,
             );
         }
 
@@ -457,13 +460,19 @@ out body;"#,
             .collect();
 
         let edges: Vec<CachedEdge> = self
-            .edges_with_names_iter()
-            .map(|(from, to, travel_time_s, distance_m, name)| CachedEdge {
-                from,
-                to,
-                travel_time_s,
-                distance_m,
-                name,
+            .graph
+            .edge_indices()
+            .filter_map(|idx| {
+                let (from, to) = self.graph.edge_endpoints(idx)?;
+                let edge = self.graph.edge_weight(idx)?;
+                Some(CachedEdge {
+                    from: from.index(),
+                    to: to.index(),
+                    travel_time_s: edge.travel_time_s,
+                    distance_m: edge.distance_m,
+                    name: edge.name.clone(),
+                    road_class: edge.road_class,
+                })
             })
             .collect();
 

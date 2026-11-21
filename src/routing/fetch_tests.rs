@@ -188,6 +188,7 @@ async fn load_or_fetch_records_disk_hit_without_network_fetch() {
             travel_time_s: 60.0,
             distance_m: 1_000.0,
             name: Some("Main Street".into()),
+            road_class: RoadClass::Residential,
         }],
     };
     let data = serde_json::to_string(&cached).expect("cached network should serialize");
@@ -235,6 +236,7 @@ fn write_cached_network(dir: &std::path::Path, bbox: &BoundingBox) {
             travel_time_s: 60.0,
             distance_m: 1_000.0,
             name: Some("Main Street".into()),
+            road_class: RoadClass::Residential,
         }],
     };
     let data = serde_json::to_string(&cached).expect("cached network should serialize");
@@ -594,6 +596,40 @@ fn single_way(tags: &str) -> RoadNetwork {
             {{"type": "way", "id": 10, "nodes": [1, 2], "tags": {tags}}}
         ]}}"#
     ))
+}
+
+fn classes(network: &RoadNetwork) -> Vec<RoadClass> {
+    network
+        .graph
+        .edge_indices()
+        .filter_map(|idx| network.graph.edge_weight(idx).map(|e| e.road_class))
+        .collect()
+}
+
+#[test]
+fn edges_carry_the_class_of_their_highway_tag() {
+    let link = single_way(r#"{"highway": "trunk_link"}"#);
+    assert_eq!(classes(&link), vec![RoadClass::Trunk; 2]);
+    let street = single_way(r#"{"highway": "living_street"}"#);
+    assert_eq!(classes(&street), vec![RoadClass::LivingStreet; 2]);
+}
+
+#[tokio::test]
+async fn a_saved_network_keeps_its_road_classes() {
+    let _guard = fetch_test_lock().lock().await;
+    reset_test_state().await;
+    let dir = unique_cache_dir("classes");
+    tokio::fs::create_dir_all(&dir).await.expect("cache dir");
+    let path = dir.join("network.json");
+    single_way(r#"{"highway": "secondary"}"#)
+        .save_to_file(&path)
+        .await
+        .expect("saved");
+    let loaded = RoadNetwork::load_from_file(&path, &NetworkConfig::default())
+        .await
+        .expect("loaded");
+    assert_eq!(classes(&loaded), vec![RoadClass::Secondary; 2]);
+    let _ = tokio::fs::remove_dir_all(&dir).await;
 }
 
 #[test]

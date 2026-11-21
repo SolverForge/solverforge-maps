@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 use super::bbox::BoundingBox;
+use super::config::RoadClass;
 use super::network::RoadNetwork;
 
-pub const CACHE_VERSION: u32 = 7;
+pub const CACHE_VERSION: u32 = 8;
 
 static NETWORK_CACHE: OnceLock<RwLock<HashMap<String, RoadNetwork>>> = OnceLock::new();
 static IN_FLIGHT_LOADS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
@@ -126,6 +127,7 @@ pub struct CachedEdge {
     pub travel_time_s: f64,
     pub distance_m: f64,
     pub name: Option<String>,
+    pub road_class: RoadClass,
 }
 
 impl RoadNetwork {

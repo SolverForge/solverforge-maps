@@ -8,6 +8,7 @@ Generic map and routing utilities for Vehicle Routing Problems (VRP) and similar
 - **K-D Tree Spatial Indexing**: Nearest-node and nearest-segment snapping on the road network
 - **Shortest Path Routing**: Dijkstra-style shortest paths for time and distance objectives
 - **Travel Time Matrix**: Compute all-pairs travel times plus same-path route distances with parallel computation
+- **Slowdowns**: Slow chosen road classes, optionally inside an area, to measure travel at busy times of day
 - **Route Geometry**: Node-snapped and edge-snapped route geometries with Douglas-Peucker simplification
 - **Polyline Encoding**: Google Polyline Algorithm for efficient route transmission
 - **Input Validation**: Fail-fast coordinate and bounding box validation
@@ -346,6 +347,39 @@ The constant `UNREACHABLE` (`i64::MAX`) indicates pairs with no path.
 
 ---
 
+### Slowdowns
+
+OpenStreetMap has no traffic data, so busy times are described as slowdowns:
+roads that take longer to drive. `slowed()` returns the same network with
+every edge's travel time multiplied by the factors of the slowdowns that apply
+to it. A slowdown applies to the road classes it lists (all when none is
+listed) and, when it has an area, only to edges whose midpoint lies inside it.
+Overlapping slowdowns multiply. Nodes, distances and connectivity stay the
+same, so places snap to the same roads and every route still exists; only the
+fastest path and its time may change.
+
+```rust
+use solverforge_maps::{BoundingBox, RoadClass, Slowdown};
+
+// Morning rush: city streets take 60% longer, the ring road 30% longer in the centre.
+let streets = Slowdown::new(1.6)?.roads([RoadClass::Primary, RoadClass::Secondary, RoadClass::Residential]);
+let centre = Slowdown::new(1.3)?
+    .roads([RoadClass::Trunk])
+    .area(BoundingBox::try_new(45.04, 7.63, 45.10, 7.72)?);
+
+let rush = network.slowed(&[streets, centre]);
+let morning = rush.compute_matrix(&locations, None).await;
+```
+
+A factor must be a finite number above zero (`SlowdownError` otherwise); a
+factor below 1 makes roads faster. Each edge carries its `RoadClass`, taken
+from its OpenStreetMap `highway` tag; links (`motorway_link`) take the class of
+the road they serve, and any other tag is `RoadClass::Other`.
+`RoadClass::parse("living_street")` and `as_str()` convert to and from the
+names used in configuration.
+
+---
+
 ### Route Geometries
 
 Compute geometries for all location pairs.
@@ -554,6 +588,8 @@ match network.route(from, to) {
 | `RouteResult` | Single route with geometry |
 | `SnappedCoord` | Coordinate snapped to road network |
 | `TravelTimeMatrix` | N x N travel time matrix with same-path route distances |
+| `Slowdown` | Road classes and an optional area that take longer to drive |
+| `SlowdownError` | A slowdown factor that is not a finite number above zero |
 | `CacheStats` | Cache statistics and metrics |
 | `EncodedSegment` | Pre-encoded route segment |
 
@@ -566,6 +602,7 @@ match network.route(from, to) {
 | `RoutingError` | Routing operation errors |
 | `RoutingProgress` | Progress reporting events |
 | `Objective` | Routing objective (Time, Distance) |
+| `RoadClass` | An edge's road class, from its OpenStreetMap `highway` tag |
 
 ### Constants
 

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use super::algo::{astar, kosaraju_scc};
+use super::config::RoadClass;
 use super::coord::Coord;
 use super::error::RoutingError;
 use super::geo::haversine_distance;
@@ -42,6 +43,7 @@ pub struct EdgeData {
     pub travel_time_s: f64,
     pub distance_m: f64,
     pub name: Option<String>,
+    pub road_class: RoadClass,
 }
 
 /// One named street along a route, with the distance covered on it.
@@ -206,7 +208,7 @@ impl RoadNetwork {
         travel_time_s: f64,
         distance_m: f64,
     ) {
-        self.add_edge_named_by_index(from, to, travel_time_s, distance_m, None);
+        self.add_edge_named_by_index(from, to, travel_time_s, distance_m, None, RoadClass::Other);
     }
 
     pub(super) fn add_edge_named_by_index(
@@ -216,6 +218,7 @@ impl RoadNetwork {
         travel_time_s: f64,
         distance_m: f64,
         name: Option<String>,
+        road_class: RoadClass,
     ) {
         let from_idx = NodeIdx::new(from);
         let to_idx = NodeIdx::new(to);
@@ -223,6 +226,7 @@ impl RoadNetwork {
             travel_time_s,
             distance_m,
             name,
+            road_class,
         };
         self.record_edge_speed(&data);
         self.graph.add_edge(from_idx, to_idx, data);
@@ -952,7 +956,49 @@ impl RoadNetwork {
         }
 
         for &(from, to, time_s, dist_m, name) in edges {
-            network.add_edge_named_by_index(from, to, time_s, dist_m, Some(name.to_string()));
+            network.add_edge_named_by_index(
+                from,
+                to,
+                time_s,
+                dist_m,
+                Some(name.to_string()),
+                RoadClass::Other,
+            );
+        }
+
+        network.build_spatial_index();
+
+        network
+    }
+
+    /// Build a network from test data whose edges carry a road class.
+    ///
+    /// # Arguments
+    /// * `nodes` - Slice of (lat, lng) tuples
+    /// * `edges` - Slice of (from_idx, to_idx, time_s, dist_m, class) tuples
+    ///
+    /// # Example
+    /// ```
+    /// use solverforge_maps::{RoadClass, RoadNetwork};
+    ///
+    /// let nodes = &[(40.0, -75.0), (39.8, -75.2)];
+    /// let edges = &[(0, 1, 60.0, 1000.0, RoadClass::Primary)];
+    /// let network = RoadNetwork::from_test_data_classed(nodes, edges);
+    ///
+    /// assert_eq!(network.edge_count(), 1);
+    /// ```
+    pub fn from_test_data_classed(
+        nodes: &[(f64, f64)],
+        edges: &[(usize, usize, f64, f64, RoadClass)],
+    ) -> Self {
+        let mut network = Self::new();
+
+        for &(lat, lng) in nodes {
+            network.add_node_at(lat, lng);
+        }
+
+        for &(from, to, time_s, dist_m, class) in edges {
+            network.add_edge_named_by_index(from, to, time_s, dist_m, None, class);
         }
 
         network.build_spatial_index();

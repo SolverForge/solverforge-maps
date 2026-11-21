@@ -39,6 +39,9 @@ RoadNetwork::load_or_fetch(...)
   +-- parse and index network graph
   |
   v
+optionally RoadNetwork::slowed(&[Slowdown]) for a busy period
+  |
+  v
 route, route_with, route_snapped, or compute_matrix
   |
   v

@@ -3,10 +3,85 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectivityPolicy {
     KeepAll,
     LargestStronglyConnectedComponent,
+}
+
+/// The class of road an edge belongs to, from its OpenStreetMap `highway` tag.
+/// A link (`motorway_link`) belongs to the class of the road it serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoadClass {
+    Motorway,
+    Trunk,
+    Primary,
+    Secondary,
+    Tertiary,
+    Residential,
+    Unclassified,
+    Service,
+    LivingStreet,
+    /// Any other `highway` value, and edges built without one.
+    Other,
+}
+
+impl RoadClass {
+    /// Every class, in order from the fastest roads down.
+    pub const ALL: [RoadClass; 10] = [
+        RoadClass::Motorway,
+        RoadClass::Trunk,
+        RoadClass::Primary,
+        RoadClass::Secondary,
+        RoadClass::Tertiary,
+        RoadClass::Residential,
+        RoadClass::Unclassified,
+        RoadClass::Service,
+        RoadClass::LivingStreet,
+        RoadClass::Other,
+    ];
+
+    /// The class of an OpenStreetMap `highway` value.
+    pub fn from_highway(highway: &str) -> Self {
+        match highway {
+            "motorway" | "motorway_link" => RoadClass::Motorway,
+            "trunk" | "trunk_link" => RoadClass::Trunk,
+            "primary" | "primary_link" => RoadClass::Primary,
+            "secondary" | "secondary_link" => RoadClass::Secondary,
+            "tertiary" | "tertiary_link" => RoadClass::Tertiary,
+            "residential" => RoadClass::Residential,
+            "unclassified" => RoadClass::Unclassified,
+            "service" => RoadClass::Service,
+            "living_street" => RoadClass::LivingStreet,
+            _ => RoadClass::Other,
+        }
+    }
+
+    /// The class's name as written in configuration: `motorway`, `living_street`, `other`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RoadClass::Motorway => "motorway",
+            RoadClass::Trunk => "trunk",
+            RoadClass::Primary => "primary",
+            RoadClass::Secondary => "secondary",
+            RoadClass::Tertiary => "tertiary",
+            RoadClass::Residential => "residential",
+            RoadClass::Unclassified => "unclassified",
+            RoadClass::Service => "service",
+            RoadClass::LivingStreet => "living_street",
+            RoadClass::Other => "other",
+        }
+    }
+
+    /// The class named `name` ([`RoadClass::as_str`]), if any.
+    pub fn parse(name: &str) -> Option<Self> {
+        RoadClass::ALL
+            .into_iter()
+            .find(|class| class.as_str() == name)
+    }
 }
 
 #[derive(Debug, Clone)]
