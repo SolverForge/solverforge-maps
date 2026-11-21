@@ -1,6 +1,14 @@
 # Changelog
 
-All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
+All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
+
+## [2.4.0](https://github.com/SolverForge/solverforge-maps/compare/v2.3.4...v2.4.0) (2026-11-21)
+
+
+### Features
+
+* **routing:** slowdowns for busy periods of the day ([bd16575](https://github.com/SolverForge/solverforge-maps/commit/bd16575350b35374918de1f4720c09bcca1d1b0e))
+
 
 ## [2.3.4](https://github.com/SolverForge/solverforge-maps/compare/v2.3.3...v2.3.4) (2026-11-18)
 
